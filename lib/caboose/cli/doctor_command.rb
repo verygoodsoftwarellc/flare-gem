@@ -42,6 +42,9 @@ module Caboose
       if key_configured?
         puts "  #{checkmark} CABOOSE_KEY configured"
         true
+      elsif credentials_exist?
+        puts "  #{checkmark} CABOOSE_KEY not in ENV or .env (may be in Rails credentials)"
+        true
       else
         puts "  #{xmark} CABOOSE_KEY not found"
         puts "    Run #{bold("caboose setup")} to authenticate"
@@ -100,6 +103,12 @@ module Caboose
 
       env_path = File.join(Dir.pwd, ".env")
       File.exist?(env_path) && File.read(env_path).match?(/^CABOOSE_KEY=.+/)
+    end
+
+    def credentials_exist?
+      %w[config/credentials.yml.enc config/credentials/production.yml.enc].any? do |path|
+        File.exist?(File.join(Dir.pwd, path))
+      end
     end
 
     def spans_expected?

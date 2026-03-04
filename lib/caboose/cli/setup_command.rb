@@ -254,6 +254,7 @@ module Caboose
 
       case choice
       when "1"
+        @saved_to_dotenv = true
         save_to_dotenv(token)
       when "2"
         print_credentials_instructions(token)
@@ -353,7 +354,7 @@ module Caboose
       contents = File.read(gitignore_path)
       entries_to_add = []
 
-      entries_to_add << ".env" unless contents.match?(/^\.env$/)
+      entries_to_add << ".env" if @saved_to_dotenv && !contents.match?(/^\.env$/)
       entries_to_add << "/db/caboose.sqlite3*" unless contents.include?("/db/caboose.sqlite3*")
 
       return if entries_to_add.empty?
