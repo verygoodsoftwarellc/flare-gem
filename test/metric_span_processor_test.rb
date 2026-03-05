@@ -188,19 +188,30 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal 150, counter[:sum_ms]
   end
 
-  def test_ignores_child_server_spans
-    # A server span with a parent is not a root request
+  def test_server_span_with_remote_parent_creates_web_metric
+    # Server spans may have a remote parent from distributed trace propagation
+    # (e.g., traceparent header). They still represent the web request handled
+    # by this application and should be tracked.
     span = MockSpan.new(
       kind: :server,
       parent_span_id: "abc123def456",
-      attributes: { "http.status_code" => 200 },
+      attributes: {
+        "http.status_code" => 200,
+        "code.namespace" => "OrdersController",
+        "code.function" => "create"
+      },
       start_ns: 0,
       end_ns: 100_000_000
     )
 
     @processor.on_end(span)
 
-    assert @storage.empty?
+    assert_equal 1, @storage.size
+    key = @storage.drain.keys.first
+    assert_equal "web", key.namespace
+    assert_equal "rails", key.service
+    assert_equal "OrdersController", key.target
+    assert_equal "create", key.operation
   end
 
   def test_ignores_spans_without_timestamps

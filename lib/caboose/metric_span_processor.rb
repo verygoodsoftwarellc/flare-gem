@@ -76,9 +76,12 @@ module Caboose
       end
     end
 
-    # Web requests: root server spans (no parent or parent is external)
+    # Web requests: any server span (entry point for this service).
+    # Server spans may have a remote parent from distributed trace propagation
+    # (e.g., traceparent header), but they still represent the web request
+    # handled by this application.
     def web_request?(span)
-      span.kind == SERVER && root_span?(span)
+      span.kind == SERVER
     end
 
     # Background jobs: root consumer spans (ActiveJob, Sidekiq)

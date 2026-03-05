@@ -163,6 +163,7 @@ class SetupCommandGitignoreTest < Minitest::Test
     File.write(File.join(@dir, ".gitignore"), "/tmp\n")
 
     cmd = Caboose::SetupCommand.new(force: false)
+    cmd.instance_variable_set(:@saved_to_dotenv, true)
     capture_io { cmd.send(:add_gitignore_entries) }
 
     contents = File.read(File.join(@dir, ".gitignore"))
