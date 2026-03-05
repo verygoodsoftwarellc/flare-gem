@@ -122,12 +122,16 @@ module Caboose
       # These have no code.namespace set by ActionPack instrumentation.
       return unless span.attributes["code.namespace"]
 
+      controller = span.attributes["code.namespace"]
+      action = span.attributes["code.function"]
+      target = action ? "#{controller}##{action}" : controller
+
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "web",
         service: "rails",
-        target: span.attributes["code.namespace"],
-        operation: span.attributes["code.function"]
+        target: target,
+        operation: http_status_class(span)
       )
 
       @storage.increment(
@@ -182,12 +186,14 @@ module Caboose
                span.attributes["http.request.method"] ||
                "UNKNOWN"
 
+      path = extract_http_path(span)
+
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "http",
         service: host.to_s.downcase,
-        target: extract_http_path(span),
-        operation: method.to_s.upcase
+        target: "#{method.to_s.upcase} #{path}",
+        operation: http_status_class(span)
       )
 
       @storage.increment(
@@ -244,6 +250,18 @@ module Caboose
     def http_error?(span)
       status = span.attributes["http.status_code"] || span.attributes["http.response.status_code"]
       status.to_i >= 500
+    end
+
+    def http_status_class(span)
+      status = span.attributes["http.status_code"] || span.attributes["http.response.status_code"]
+      code = status.to_i
+      if code >= 500 then "5xx"
+      elsif code >= 400 then "4xx"
+      elsif code >= 300 then "3xx"
+      elsif code >= 200 then "2xx"
+      elsif code >= 100 then "1xx"
+      else "unknown"
+      end
     end
 
     def span_error?(span)

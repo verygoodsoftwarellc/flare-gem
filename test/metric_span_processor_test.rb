@@ -29,8 +29,8 @@ class MetricSpanProcessorTest < Minitest::Test
     key = @storage.drain.keys.first
     assert_equal "web", key.namespace
     assert_equal "rails", key.service
-    assert_equal "UsersController", key.target
-    assert_equal "show", key.operation
+    assert_equal "UsersController#show", key.target
+    assert_equal "2xx", key.operation
   end
 
   def test_web_request_error_tracking
@@ -164,8 +164,8 @@ class MetricSpanProcessorTest < Minitest::Test
     key = @storage.drain.keys.first
     assert_equal "http", key.namespace
     assert_equal "api.stripe.com", key.service
-    assert_equal "/v1/charges", key.target
-    assert_equal "POST", key.operation
+    assert_equal "POST /v1/charges", key.target
+    assert_equal "2xx", key.operation
   end
 
   def test_duration_calculation
@@ -210,8 +210,8 @@ class MetricSpanProcessorTest < Minitest::Test
     key = @storage.drain.keys.first
     assert_equal "web", key.namespace
     assert_equal "rails", key.service
-    assert_equal "OrdersController", key.target
-    assert_equal "create", key.operation
+    assert_equal "OrdersController#create", key.target
+    assert_equal "2xx", key.operation
   end
 
   def test_ignores_spans_without_timestamps
@@ -255,7 +255,7 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor.on_end(span)
 
     key = @storage.drain.keys.first
-    assert_equal "/users/:id/posts/:id", key.target
+    assert_equal "GET /users/:id/posts/:id", key.target
   end
 
   def test_http_path_normalizes_uuids
@@ -275,7 +275,7 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor.on_end(span)
 
     key = @storage.drain.keys.first
-    assert_equal "/items/:uuid", key.target
+    assert_equal "GET /items/:uuid", key.target
   end
 
   def test_http_path_normalizes_mongo_ids
@@ -295,7 +295,7 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor.on_end(span)
 
     key = @storage.drain.keys.first
-    assert_equal "/documents/:id", key.target
+    assert_equal "GET /documents/:id", key.target
   end
 
   def test_http_path_normalizes_long_tokens
@@ -315,7 +315,7 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor.on_end(span)
 
     key = @storage.drain.keys.first
-    assert_equal "/verify/:token", key.target
+    assert_equal "GET /verify/:token", key.target
   end
 
   def test_http_path_preserves_static_segments
@@ -335,7 +335,7 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor.on_end(span)
 
     key = @storage.drain.keys.first
-    assert_equal "/api/v1/users/search", key.target
+    assert_equal "GET /api/v1/users/search", key.target
   end
 
   # Cache metric tests
