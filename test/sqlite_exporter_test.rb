@@ -15,23 +15,28 @@ class SQLiteExporterTest < Minitest::Test
     Thread.current[:caboose_sqlite_db] = nil
   end
 
-  def test_creates_database_file
+  def test_creates_database_on_first_export
+    refute File.exist?(@db_path)
+    @exporter.export([mock_span_data])
     assert File.exist?(@db_path)
   end
 
-  def test_creates_spans_table
+  def test_creates_spans_table_on_first_export
+    @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
     assert_includes tables, "caboose_spans"
   end
 
-  def test_creates_events_table
+  def test_creates_events_table_on_first_export
+    @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
     assert_includes tables, "caboose_events"
   end
 
-  def test_creates_properties_table
+  def test_creates_properties_table_on_first_export
+    @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
     assert_includes tables, "caboose_properties"
@@ -222,7 +227,8 @@ class SQLiteExporterTest < Minitest::Test
 
   def test_creates_parent_directory_if_missing
     nested_path = File.join(@tmp_dir, "nested", "dir", "test.sqlite3")
-    _exporter = Caboose::SQLiteExporter.new(nested_path)
+    exporter = Caboose::SQLiteExporter.new(nested_path)
+    exporter.export([mock_span_data])
 
     assert File.exist?(nested_path)
   end

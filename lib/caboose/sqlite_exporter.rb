@@ -15,8 +15,7 @@ module Caboose
     def initialize(database_path)
       @database_path = database_path
       @mutex = Mutex.new
-      setup_database
-      close_connection # avoid inheriting connection across fork
+      @setup = false
     end
 
     # Maximum number of retry attempts when the database is busy.
@@ -24,6 +23,8 @@ module Caboose
     MAX_RETRIES = 3
 
     def export(span_datas, timeout: nil)
+      setup_database unless @setup
+
       retries = 0
       exported = 0
 
@@ -163,6 +164,8 @@ module Caboose
 
     def setup_database
       @mutex.synchronize do
+        return if @setup
+
         db = connection
         configure_pragmas(db)
 
@@ -235,6 +238,9 @@ module Caboose
         db.execute(<<~SQL)
           CREATE INDEX IF NOT EXISTS idx_properties_key ON caboose_properties(key)
         SQL
+
+        close_connection # avoid inheriting connection across fork
+        @setup = true
       end
     end
 

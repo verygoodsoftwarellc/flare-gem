@@ -19,8 +19,7 @@ module Caboose
       def initialize(database_path)
         @database_path = database_path
         @mutex = Mutex.new
-        setup_database
-        close_connection # avoid inheriting connection across fork
+        @setup = false
       end
 
       # List root spans that are HTTP requests (for the requests index)
@@ -611,6 +610,8 @@ module Caboose
       def setup_database
         # The SQLiteExporter creates the tables, but we ensure they exist here too
         @mutex.synchronize do
+          return if @setup
+
           db = connection
           configure_pragmas(db)
 
@@ -665,6 +666,9 @@ module Caboose
 
           db.execute("CREATE INDEX IF NOT EXISTS idx_properties_owner ON caboose_properties(owner_type, owner_id)")
           db.execute("CREATE INDEX IF NOT EXISTS idx_properties_key ON caboose_properties(key)")
+
+          close_connection # avoid inheriting connection across fork
+          @setup = true
         end
       end
 
@@ -696,18 +700,21 @@ module Caboose
       end
 
       def execute(sql, values = [])
+        setup_database unless @setup
         @mutex.synchronize do
           connection.execute(sql, values)
         end
       end
 
       def query_one(sql, values = [])
+        setup_database unless @setup
         @mutex.synchronize do
           connection.execute(sql, values).first
         end
       end
 
       def query_all(sql, values = [])
+        setup_database unless @setup
         @mutex.synchronize do
           connection.execute(sql, values)
         end

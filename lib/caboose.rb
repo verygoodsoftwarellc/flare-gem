@@ -139,6 +139,7 @@ module Caboose
     require "opentelemetry-instrumentation-rack"
     require "opentelemetry-instrumentation-net_http"
     require "opentelemetry-instrumentation-active_support"
+    require "opentelemetry/instrumentation/active_support/span_subscriber"
     require "opentelemetry-instrumentation-action_pack" if defined?(ActionController)
     require "opentelemetry-instrumentation-action_view" if defined?(ActionView)
     require "opentelemetry-instrumentation-active_job" if defined?(ActiveJob)
