@@ -355,7 +355,7 @@ module Caboose
       entries_to_add = []
 
       entries_to_add << ".env" if @saved_to_dotenv && !contents.match?(/^\.env$/)
-      entries_to_add << "/db/caboose.sqlite3*" unless contents.include?("/db/caboose.sqlite3*")
+      entries_to_add << "caboose.sqlite3*" unless contents.include?("caboose.sqlite3*")
 
       return if entries_to_add.empty?
 
