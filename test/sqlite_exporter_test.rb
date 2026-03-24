@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "caboose/sqlite_exporter"
+require "caboose/storage/sqlite"
 
 class SQLiteExporterTest < Minitest::Test
   def setup

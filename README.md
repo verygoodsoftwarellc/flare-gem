@@ -25,6 +25,14 @@ Add Caboose to your Gemfile:
 gem "caboose"
 ```
 
+The local development dashboard uses SQLite to store spans. If your app doesn't already have `sqlite3` in its Gemfile, add it to the development group:
+
+```ruby
+group :development do
+  gem "sqlite3"
+end
+```
+
 Then run:
 
 ```bash

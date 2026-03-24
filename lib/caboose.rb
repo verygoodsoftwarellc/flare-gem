@@ -5,7 +5,6 @@ require_relative "caboose/configuration"
 
 require "opentelemetry/sdk"
 
-require_relative "caboose/sqlite_exporter"
 require_relative "caboose/source_location"
 require_relative "caboose/metric_key"
 require_relative "caboose/metric_storage"
@@ -64,7 +63,12 @@ module Caboose
   end
 
   def exporter
-    @exporter ||= SQLiteExporter.new(configuration.database_path)
+    @exporter ||= begin
+      require_relative "caboose/sqlite_exporter"
+      SQLiteExporter.new(configuration.database_path)
+    rescue LoadError
+      raise LoadError, "Caboose spans require the sqlite3 gem. Add `gem 'sqlite3'` to your Gemfile."
+    end
   end
 
   def exporter=(exporter)
@@ -378,7 +382,12 @@ module Caboose
   end
 
   def storage
-    @storage ||= Storage::SQLite.new(configuration.database_path)
+    @storage ||= begin
+      require_relative "caboose/storage/sqlite"
+      Storage::SQLite.new(configuration.database_path)
+    rescue LoadError
+      raise LoadError, "Caboose spans require the sqlite3 gem. Add `gem 'sqlite3'` to your Gemfile."
+    end
   end
 
   def reset_storage!

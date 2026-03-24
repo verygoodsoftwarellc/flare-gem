@@ -50,4 +50,5 @@ module Caboose
   end
 end
 
-require_relative "storage/sqlite"
+  # storage/sqlite is loaded on demand when spans are enabled
+  # to avoid requiring sqlite3 in production environments

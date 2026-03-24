@@ -27,7 +27,6 @@ Gem::Specification.new do |spec|
   spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "sqlite3", ">= 1.4"
   spec.add_dependency "railties", ">= 7.0"
   spec.add_dependency "activesupport", ">= 7.0"
   spec.add_dependency "actionpack", ">= 7.0"
