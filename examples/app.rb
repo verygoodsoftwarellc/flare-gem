@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Single-file Rails app for testing Caboose
+# Single-file Rails app for testing Flare
 # Run with: bundle exec ruby examples/app.rb
 
 require "bundler/setup"
@@ -9,9 +9,9 @@ require "action_controller/railtie"
 require "active_job/railtie"
 require "net/http"
 
-# Load caboose from local path
+# Load flare from local path
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
-require "caboose"
+require "flare"
 
 class App < Rails::Application
   config.root = __dir__
@@ -77,10 +77,10 @@ class HomeController < ActionController::Base
     render plain: <<~HTML, content_type: "text/html"
       <!DOCTYPE html>
       <html>
-      <head><title>Caboose Demo</title></head>
+      <head><title>Flare Demo</title></head>
       <body style="font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 0 20px;">
-        <h1>Caboose Demo</h1>
-        <p>A minimal Rails app to test Caboose instrumentation.</p>
+        <h1>Flare Demo</h1>
+        <p>A minimal Rails app to test Flare instrumentation.</p>
         <h3>Requests</h3>
         <ul>
           <li><a href="/api">API endpoint (simulates SQL + cache + view)</a></li>
@@ -96,7 +96,7 @@ class HomeController < ActionController::Base
           </button>
         </form>
         <hr>
-        <p><strong><a href="/caboose">Open Caboose Dashboard</a></strong></p>
+        <p><strong><a href="/flare">Open Flare Dashboard</a></strong></p>
       </body>
       </html>
     HTML
@@ -142,7 +142,7 @@ class HomeController < ActionController::Base
   def error
     # Report an error using the Rails error reporter so it gets captured as a clue
     begin
-      raise StandardError, "Intentional error for testing Caboose exceptions"
+      raise StandardError, "Intentional error for testing Flare exceptions"
     rescue => e
       Rails.error.report(e, handled: true, severity: :error, context: { endpoint: "error", user_id: 42 })
       render plain: "Error was reported: #{e.message}", status: 500
@@ -171,7 +171,7 @@ end
 if __FILE__ == $0
   require "rack/handler/puma"
   port = ENV.fetch("PORT", 9999).to_i
-  puts "Starting Caboose demo at http://localhost:#{port}"
-  puts "Dashboard available at http://localhost:#{port}/caboose"
+  puts "Starting Flare demo at http://localhost:#{port}"
+  puts "Dashboard available at http://localhost:#{port}/flare"
   Rack::Handler::Puma.run(Rails.application, Port: port, Host: "0.0.0.0", Verbose: false)
 end

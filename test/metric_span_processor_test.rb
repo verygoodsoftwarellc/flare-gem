@@ -1,14 +1,14 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/metric_storage"
-require "caboose/metric_span_processor"
+require "flare/metric_storage"
+require "flare/metric_span_processor"
 
 class MetricSpanProcessorTest < Minitest::Test
   def setup
-    @storage = Caboose::MetricStorage.new
-    @http_config = Caboose::HttpMetricsConfig.new
-    @processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+    @storage = Flare::MetricStorage.new
+    @http_config = Flare::HttpMetricsConfig.new
+    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
   end
 
   def test_web_request_creates_metric
@@ -60,7 +60,7 @@ class MetricSpanProcessorTest < Minitest::Test
       parent_span_id: nil,
       attributes: {
         "http.status_code" => 200,
-        Caboose::TRANSACTION_NAME_ATTRIBUTE => "RestApi::Routes::Audits#get"
+        Flare::TRANSACTION_NAME_ATTRIBUTE => "RestApi::Routes::Audits#get"
       },
       start_ns: 0,
       end_ns: 100_000_000
@@ -84,7 +84,7 @@ class MetricSpanProcessorTest < Minitest::Test
         "http.status_code" => 200,
         "code.namespace" => "UsersController",
         "code.function" => "show",
-        Caboose::TRANSACTION_NAME_ATTRIBUTE => "CustomName#action"
+        Flare::TRANSACTION_NAME_ATTRIBUTE => "CustomName#action"
       },
       start_ns: 0,
       end_ns: 100_000_000
@@ -123,7 +123,7 @@ class MetricSpanProcessorTest < Minitest::Test
       name: "MyJob process",
       attributes: {
         "messaging.system" => "sidekiq",
-        Caboose::TRANSACTION_NAME_ATTRIBUTE => "CustomWorker"
+        Flare::TRANSACTION_NAME_ATTRIBUTE => "CustomWorker"
       },
       start_ns: 0,
       end_ns: 50_000_000
@@ -925,16 +925,16 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET /v1/users-custom", key.target
   end
 
-  def test_http_default_config_allows_caboose_dev
-    config = Caboose::HttpMetricsConfig::DEFAULT
-    processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+  def test_http_default_config_allows_flare_dev
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
 
     span = MockSpan.new(
       kind: :client,
       parent_span_id: "abc123",
       attributes: {
         "http.method" => "POST",
-        "http.host" => "caboose.dev",
+        "http.host" => "flare.am",
         "http.target" => "/api/metrics",
         "http.status_code" => 200
       },
@@ -949,8 +949,8 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_http_default_config_allows_flippercloud_adapter
-    config = Caboose::HttpMetricsConfig::DEFAULT
-    processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
 
     span = MockSpan.new(
       kind: :client,
@@ -972,8 +972,8 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_http_default_config_normalizes_flippercloud_feature_name
-    config = Caboose::HttpMetricsConfig::DEFAULT
-    processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
 
     span = MockSpan.new(
       kind: :client,
@@ -995,8 +995,8 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_http_default_config_normalizes_flippercloud_gate
-    config = Caboose::HttpMetricsConfig::DEFAULT
-    processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
 
     span = MockSpan.new(
       kind: :client,
@@ -1018,8 +1018,8 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_http_default_config_stars_unknown_host
-    config = Caboose::HttpMetricsConfig::DEFAULT
-    processor = Caboose::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
 
     span = MockSpan.new(
       kind: :client,

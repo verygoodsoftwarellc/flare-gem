@@ -1,4 +1,4 @@
-# Caboose
+# Flare
 
 Track what just happened in your Rails app.
 
@@ -19,10 +19,10 @@ Each span shows a waterfall visualization of child operations, making it easy to
 
 ## Installation
 
-Add Caboose to your Gemfile:
+Add Flare to your Gemfile:
 
 ```ruby
-gem "caboose"
+gem "flare"
 ```
 
 The local development dashboard uses SQLite to store spans. If your app doesn't already have `sqlite3` in its Gemfile, add it to the development group:
@@ -37,38 +37,38 @@ Then run:
 
 ```bash
 bundle install
-caboose setup
+flare setup
 ```
 
 The setup command will:
 
-1. Authenticate with caboose.dev to configure metrics
+1. Authenticate with flare.am to configure metrics
 2. Create a config initializer with sensible defaults
 3. Update .gitignore
 
-Start your Rails server and visit `/caboose` to see the dashboard.
+Start your Rails server and visit `/flare` to see the dashboard.
 
 ### Manual Configuration
 
-If you prefer to skip the setup wizard, just add the gem and visit `/caboose` in development. The dashboard works out of the box with no configuration needed.
+If you prefer to skip the setup wizard, just add the gem and visit `/flare` in development. The dashboard works out of the box with no configuration needed.
 
-To enable metrics, set `CABOOSE_KEY` in your environment (get one at [caboose.dev](https://caboose.dev)).
+To enable metrics, set `FLARE_KEY` in your environment (get one at [flare.am](https://flare.am)).
 
 ### CLI Commands
 
 ```bash
-caboose setup    # Authenticate and configure Caboose
-caboose doctor   # Check your setup for issues
-caboose status   # Show current configuration
+flare setup    # Authenticate and configure Flare
+flare doctor   # Check your setup for issues
+flare status   # Show current configuration
 ```
 
 ## Configuration
 
-All configuration is optional. Caboose works out of the box with sensible defaults.
+All configuration is optional. Flare works out of the box with sensible defaults.
 
 ```ruby
-Caboose.configure do |config|
-  # Enable or disable Caboose (default: true)
+Flare.configure do |config|
+  # Enable or disable Flare (default: true)
   config.enabled = true
 
   # How long to keep spans in hours (default: 24)
@@ -77,8 +77,8 @@ Caboose.configure do |config|
   # Maximum number of spans to store (default: 10000)
   config.max_spans = 10_000
 
-  # Path to the SQLite database (default: db/caboose.sqlite3)
-  config.database_path = Rails.root.join("db", "caboose.sqlite3").to_s
+  # Path to the SQLite database (default: db/flare.sqlite3)
+  config.database_path = Rails.root.join("db", "flare.sqlite3").to_s
 
   # Ignore specific requests (receives a Rack::Request, return true to ignore)
   config.ignore_request = ->(request) {
@@ -92,7 +92,7 @@ end
 
 ## Custom Instrumentation
 
-Caboose automatically captures Rails internals, but you can also instrument your own code. Use `ActiveSupport::Notifications.instrument` with an `app.` prefix:
+Flare automatically captures Rails internals, but you can also instrument your own code. Use `ActiveSupport::Notifications.instrument` with an `app.` prefix:
 
 ```ruby
 # In your application code
@@ -109,14 +109,14 @@ ActiveSupport::Notifications.instrument("app.send_sms", to: phone) do
 end
 ```
 
-This works in all environments - in production it's essentially a no-op, in development Caboose automatically captures and displays it.
+This works in all environments - in production it's essentially a no-op, in development Flare automatically captures and displays it.
 
 ### Custom Notification Prefixes
 
-By default, Caboose subscribes to notifications starting with `app.`. You can add additional prefixes:
+By default, Flare subscribes to notifications starting with `app.`. You can add additional prefixes:
 
 ```ruby
-Caboose.configure do |config|
+Flare.configure do |config|
   config.subscribe_patterns << "mycompany."
   config.subscribe_patterns << "external_service."
 end
@@ -124,7 +124,7 @@ end
 
 ## How It Works
 
-Caboose uses [OpenTelemetry](https://opentelemetry.io/) for instrumentation. It automatically configures:
+Flare uses [OpenTelemetry](https://opentelemetry.io/) for instrumentation. It automatically configures:
 
 - `OpenTelemetry::Instrumentation::Rack` - HTTP requests
 - `OpenTelemetry::Instrumentation::ActiveSupport` - Notifications (SQL, cache, mail)
@@ -133,7 +133,7 @@ Caboose uses [OpenTelemetry](https://opentelemetry.io/) for instrumentation. It 
 - `OpenTelemetry::Instrumentation::ActiveJob` - Background jobs
 - `OpenTelemetry::Instrumentation::Net::HTTP` - Outgoing HTTP calls
 
-Spans are stored in a local SQLite database (`db/caboose.sqlite3` by default) and automatically pruned based on retention settings.
+Spans are stored in a local SQLite database (`db/flare.sqlite3` by default) and automatically pruned based on retention settings.
 
 ## Development
 
@@ -141,7 +141,7 @@ After checking out the repo, run `bin/setup` to install dependencies. Then, run 
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/jnunemaker/caboose.
+Bug reports and pull requests are welcome on GitHub at https://github.com/jnunemaker/flare.
 
 ## License
 

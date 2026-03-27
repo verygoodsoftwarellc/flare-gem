@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/metric_key"
-require "caboose/metric_storage"
+require "flare/metric_key"
+require "flare/metric_storage"
 
 class MetricStorageTest < Minitest::Test
   def setup
-    @storage = Caboose::MetricStorage.new
+    @storage = Flare::MetricStorage.new
   end
 
   def test_empty_initially
@@ -110,7 +110,7 @@ class MetricStorageTest < Minitest::Test
   private
 
   def create_key(namespace, service, target, operation)
-    Caboose::MetricKey.new(
+    Flare::MetricKey.new(
       bucket: Time.now,
       namespace: namespace,
       service: service,

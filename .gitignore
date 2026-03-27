@@ -14,5 +14,5 @@ examples/db/*.sqlite3*
 log/*
 .playwright-mcp
 .env
-caboose.sqlite3*
+flare.sqlite3*
 .superset/

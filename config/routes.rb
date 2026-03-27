@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-Caboose::Engine.routes.draw do
+Flare::Engine.routes.draw do
   resources :requests, only: [:index, :show]
   resources :jobs, only: [:index, :show]
 

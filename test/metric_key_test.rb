@@ -1,19 +1,19 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/metric_key"
+require "flare/metric_key"
 
 class MetricKeyTest < Minitest::Test
   def test_equality_with_same_values
     time = Time.now
-    key1 = Caboose::MetricKey.new(
+    key1 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
       target: "UsersController",
       operation: "show"
     )
-    key2 = Caboose::MetricKey.new(
+    key2 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
@@ -28,14 +28,14 @@ class MetricKeyTest < Minitest::Test
 
   def test_inequality_with_different_values
     time = Time.now
-    key1 = Caboose::MetricKey.new(
+    key1 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
       target: "UsersController",
       operation: "show"
     )
-    key2 = Caboose::MetricKey.new(
+    key2 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
@@ -49,14 +49,14 @@ class MetricKeyTest < Minitest::Test
 
   def test_works_as_hash_key
     time = Time.now
-    key1 = Caboose::MetricKey.new(
+    key1 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
       target: "UsersController",
       operation: "show"
     )
-    key2 = Caboose::MetricKey.new(
+    key2 = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",
@@ -71,7 +71,7 @@ class MetricKeyTest < Minitest::Test
   end
 
   def test_frozen_strings
-    key = Caboose::MetricKey.new(
+    key = Flare::MetricKey.new(
       bucket: Time.now,
       namespace: "web",
       service: "rails",
@@ -86,7 +86,7 @@ class MetricKeyTest < Minitest::Test
   end
 
   def test_nil_target
-    key = Caboose::MetricKey.new(
+    key = Flare::MetricKey.new(
       bucket: Time.now,
       namespace: "db",
       service: "pg",
@@ -99,7 +99,7 @@ class MetricKeyTest < Minitest::Test
 
   def test_to_h
     time = Time.now
-    key = Caboose::MetricKey.new(
+    key = Flare::MetricKey.new(
       bucket: time,
       namespace: "web",
       service: "rails",

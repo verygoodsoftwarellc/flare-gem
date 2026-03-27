@@ -12,16 +12,16 @@ require "action_view/railtie"
 
 TMP_DIR = Dir.mktmpdir
 
-require_relative "../lib/caboose"
+require_relative "../lib/flare"
 
-Caboose.configure do |c|
-  c.database_path = File.join(TMP_DIR, "caboose_test.sqlite3")
+Flare.configure do |c|
+  c.database_path = File.join(TMP_DIR, "flare_test.sqlite3")
 end
 
 class TestApp < Rails::Application
   config.eager_load = false
   config.hosts.clear
-  config.secret_key_base = "test_secret_key_base_for_caboose_tests"
+  config.secret_key_base = "test_secret_key_base_for_flare_tests"
   config.active_support.deprecation = :silence
 
   # Avoid conflict with engine auto-mount
@@ -39,14 +39,14 @@ class IntegrationTest < Minitest::Test
   end
 
   def setup
-    @db_path = Caboose.configuration.database_path
+    @db_path = Flare.configuration.database_path
 
-    Caboose.reset_storage!
-    Caboose.storage.clear_all
+    Flare.reset_storage!
+    Flare.storage.clear_all
   end
 
   def teardown
-    Caboose.storage.clear_all
+    Flare.storage.clear_all
   end
 
   def create_request_span(trace_id:, name: "GET /users", method: "GET", status: 200, controller: "UsersController", action: "index")
@@ -55,35 +55,35 @@ class IntegrationTest < Minitest::Test
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 100_000_000 # 100ms
 
-    db.execute(<<~SQL, [name, "server", "span_#{trace_id}", trace_id, Caboose::MISSING_PARENT_ID, start_ts, end_ts, 0, 0, 0, now, now])
-      INSERT INTO caboose_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
+    db.execute(<<~SQL, [name, "server", "span_#{trace_id}", trace_id, Flare::MISSING_PARENT_ID, start_ts, end_ts, 0, 0, 0, now, now])
+      INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["http.method", "\"#{method}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["http.method", "\"#{method}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["http.status_code", status.to_s, 1, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["http.status_code", status.to_s, 1, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["http.target", "\"/users\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["http.target", "\"/users\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["code.namespace", "\"#{controller}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["code.namespace", "\"#{controller}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["code.function", "\"#{action}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["code.function", "\"#{action}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
@@ -96,20 +96,20 @@ class IntegrationTest < Minitest::Test
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 50_000_000 # 50ms
 
-    db.execute(<<~SQL, [name, "consumer", "span_#{trace_id}", trace_id, Caboose::MISSING_PARENT_ID, start_ts, end_ts, 0, 0, 0, now, now])
-      INSERT INTO caboose_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
+    db.execute(<<~SQL, [name, "consumer", "span_#{trace_id}", trace_id, Flare::MISSING_PARENT_ID, start_ts, end_ts, 0, 0, 0, now, now])
+      INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["code.namespace", "\"#{job_class}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["code.namespace", "\"#{job_class}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["messaging.destination", "\"#{queue}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["messaging.destination", "\"#{queue}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
@@ -123,14 +123,14 @@ class IntegrationTest < Minitest::Test
     end_ts = start_ts + 5_000_000 # 5ms
 
     db.execute(<<~SQL, [name, "internal", "child_span_#{rand(10000)}", trace_id, parent_span_id, start_ts, end_ts, 0, 0, 0, now, now])
-      INSERT INTO caboose_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
+      INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["db.statement", "\"#{statement}\"", 0, "Caboose::Span", span_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["db.statement", "\"#{statement}\"", 0, "Flare::Span", span_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
@@ -144,26 +144,26 @@ class IntegrationTest < Minitest::Test
     end_ts = start_ts + 1_000_000 # 1ms
 
     db.execute(<<~SQL, ["exception", "internal", "exc_span_#{rand(10000)}", trace_id, parent_span_id, start_ts, end_ts, 0, 1, 0, now, now])
-      INSERT INTO caboose_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
+      INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_properties, total_recorded_events, total_recorded_links, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
 
     span_id = db.last_insert_row_id
 
     db.execute(<<~SQL, [span_id, "exception", now, now])
-      INSERT INTO caboose_events (span_id, name, created_at, updated_at)
+      INSERT INTO flare_events (span_id, name, created_at, updated_at)
       VALUES (?, ?, ?, ?)
     SQL
 
     event_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["exception.type", "\"#{exception_type}\"", 0, "Caboose::Event", event_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["exception.type", "\"#{exception_type}\"", 0, "Flare::Event", event_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["exception.message", "\"#{exception_message}\"", 0, "Caboose::Event", event_id, now, now])
-      INSERT INTO caboose_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+    db.execute(<<~SQL, ["exception.message", "\"#{exception_message}\"", 0, "Flare::Event", event_id, now, now])
+      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
@@ -171,7 +171,7 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_requests_index_empty
-    get "/caboose/requests"
+    get "/flare/requests"
 
     assert last_response.ok?, "Expected 200, got #{last_response.status}"
     assert_includes last_response.body, "Requests"
@@ -181,7 +181,7 @@ class IntegrationTest < Minitest::Test
     create_request_span(trace_id: "trace_001", name: "GET /users", method: "GET", status: 200)
     create_request_span(trace_id: "trace_002", name: "POST /users", method: "POST", status: 201)
 
-    get "/caboose/requests"
+    get "/flare/requests"
 
     assert last_response.ok?
     assert_includes last_response.body, "UsersController"
@@ -193,7 +193,7 @@ class IntegrationTest < Minitest::Test
     create_request_span(trace_id: "trace_001", status: 200)
     create_request_span(trace_id: "trace_002", status: 500)
 
-    get "/caboose/requests", { status: "2xx" }
+    get "/flare/requests", { status: "2xx" }
 
     assert last_response.ok?
     assert_includes last_response.body, "200"
@@ -203,7 +203,7 @@ class IntegrationTest < Minitest::Test
     create_request_span(trace_id: "trace_001", method: "GET")
     create_request_span(trace_id: "trace_002", method: "POST")
 
-    get "/caboose/requests", { method: "GET" }
+    get "/flare/requests", { method: "GET" }
 
     assert last_response.ok?
   end
@@ -211,14 +211,14 @@ class IntegrationTest < Minitest::Test
   def test_requests_show
     create_request_span(trace_id: "trace_show_001", name: "GET /users", controller: "UsersController", action: "index")
 
-    get "/caboose/requests/trace_show_001"
+    get "/flare/requests/trace_show_001"
 
     assert last_response.ok?
     assert_includes last_response.body, "GET /users"
   end
 
   def test_requests_show_not_found
-    get "/caboose/requests/nonexistent_trace"
+    get "/flare/requests/nonexistent_trace"
 
     assert last_response.redirect?
     follow_redirect!
@@ -229,19 +229,19 @@ class IntegrationTest < Minitest::Test
     create_request_span(trace_id: "trace_with_children", name: "GET /users")
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    row = db.execute("SELECT span_id FROM caboose_spans WHERE trace_id = ?", ["trace_with_children"]).first
+    row = db.execute("SELECT span_id FROM flare_spans WHERE trace_id = ?", ["trace_with_children"]).first
     parent_span_id = row["span_id"]
 
     create_query_span(trace_id: "trace_with_children", parent_span_id: parent_span_id, statement: "SELECT * FROM users")
 
-    get "/caboose/requests/trace_with_children"
+    get "/flare/requests/trace_with_children"
 
     assert last_response.ok?
     assert_includes last_response.body, "GET /users"
   end
 
   def test_jobs_index_empty
-    get "/caboose/jobs"
+    get "/flare/jobs"
 
     assert last_response.ok?
     assert_includes last_response.body, "Jobs"
@@ -251,7 +251,7 @@ class IntegrationTest < Minitest::Test
     create_job_span(trace_id: "job_trace_001", job_class: "SendEmailJob", queue: "mailers")
     create_job_span(trace_id: "job_trace_002", job_class: "ProcessOrderJob", queue: "default")
 
-    get "/caboose/jobs"
+    get "/flare/jobs"
 
     assert last_response.ok?
     assert_includes last_response.body, "SendEmailJob"
@@ -261,14 +261,14 @@ class IntegrationTest < Minitest::Test
   def test_jobs_show
     create_job_span(trace_id: "job_show_trace", job_class: "MyTestJob", queue: "critical")
 
-    get "/caboose/jobs/job_show_trace"
+    get "/flare/jobs/job_show_trace"
 
     assert last_response.ok?
     assert_includes last_response.body, "MyTestJob"
   end
 
   def test_jobs_show_not_found
-    get "/caboose/jobs/nonexistent_job_trace"
+    get "/flare/jobs/nonexistent_job_trace"
 
     assert last_response.redirect?
     follow_redirect!
@@ -276,7 +276,7 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_queries_index_empty
-    get "/caboose/spans/queries"
+    get "/flare/spans/queries"
 
     assert last_response.ok?
     assert_includes last_response.body, "Queries"
@@ -285,19 +285,19 @@ class IntegrationTest < Minitest::Test
   def test_queries_index_with_data
     span_id = create_request_span(trace_id: "query_trace_001")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    row = db.execute("SELECT span_id FROM caboose_spans WHERE id = ?", [span_id]).first
+    row = db.execute("SELECT span_id FROM flare_spans WHERE id = ?", [span_id]).first
     parent_span_id = row["span_id"]
 
     create_query_span(trace_id: "query_trace_001", parent_span_id: parent_span_id, statement: "SELECT * FROM posts WHERE id = 1")
 
-    get "/caboose/spans/queries"
+    get "/flare/spans/queries"
 
     assert last_response.ok?
     assert_includes last_response.body, "SELECT * FROM posts WHERE id = 1"
   end
 
   def test_exceptions_index_empty
-    get "/caboose/spans/exceptions"
+    get "/flare/spans/exceptions"
 
     assert last_response.ok?
     assert_includes last_response.body, "Exceptions"
@@ -306,46 +306,46 @@ class IntegrationTest < Minitest::Test
   def test_exceptions_index_with_data
     span_id = create_request_span(trace_id: "exc_trace_001")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    row = db.execute("SELECT span_id FROM caboose_spans WHERE id = ?", [span_id]).first
+    row = db.execute("SELECT span_id FROM flare_spans WHERE id = ?", [span_id]).first
     parent_span_id = row["span_id"]
 
     create_exception_span(trace_id: "exc_trace_001", parent_span_id: parent_span_id, exception_type: "ActiveRecord::RecordNotFound", exception_message: "Couldn't find User")
 
-    get "/caboose/spans/exceptions"
+    get "/flare/spans/exceptions"
 
     assert last_response.ok?
   end
 
   def test_cache_index
-    get "/caboose/spans/cache"
+    get "/flare/spans/cache"
 
     assert last_response.ok?
     assert_includes last_response.body, "Cache"
   end
 
   def test_views_index
-    get "/caboose/spans/views"
+    get "/flare/spans/views"
 
     assert last_response.ok?
     assert_includes last_response.body, "Views"
   end
 
   def test_http_index
-    get "/caboose/spans/http"
+    get "/flare/spans/http"
 
     assert last_response.ok?
     assert_includes last_response.body, "HTTP"
   end
 
   def test_mail_index
-    get "/caboose/spans/mail"
+    get "/flare/spans/mail"
 
     assert last_response.ok?
     assert_includes last_response.body, "Mail"
   end
 
   def test_root_redirects_to_requests
-    get "/caboose"
+    get "/flare"
 
     assert last_response.ok?
     assert_includes last_response.body, "Requests"
@@ -354,13 +354,13 @@ class IntegrationTest < Minitest::Test
   def test_clear_data
     create_request_span(trace_id: "to_be_cleared")
 
-    delete "/caboose/clear"
+    delete "/flare/clear"
 
     assert last_response.redirect?, "Expected redirect after clear, got status #{last_response.status}"
 
     follow_redirect!
 
-    requests = Caboose.storage.list_requests
+    requests = Flare.storage.list_requests
     assert_equal 0, requests.size
   end
 
@@ -369,7 +369,7 @@ class IntegrationTest < Minitest::Test
       create_request_span(trace_id: "paginated_trace_#{i.to_s.rjust(3, '0')}")
     end
 
-    get "/caboose/requests"
+    get "/flare/requests"
 
     assert last_response.ok?
     assert_includes last_response.body, "Next"

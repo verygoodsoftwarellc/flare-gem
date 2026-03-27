@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Flare</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <%= csrf_meta_tags %>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <link href="/flare-assets/flare.css" rel="stylesheet">
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="<%= flare.root_path %>" class="logo">
+          <div class="logo-icon">
+            <i class="bi bi-train-front"></i>
+          </div>
+          <span class="logo-text">Flare</span>
+        </a>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Traces</div>
+
+          <a href="<%= flare.requests_path %>" class="nav-item <%= 'active' if current_section == 'requests' %>">
+            <i class="bi bi-arrow-left-right"></i>
+            <span>Requests</span>
+          </a>
+
+          <a href="<%= flare.jobs_path %>" class="nav-item <%= 'active' if current_section == 'jobs' %>">
+            <i class="bi bi-briefcase"></i>
+            <span>Jobs</span>
+          </a>
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-section-title">Spans</div>
+
+          <a href="<%= flare.exceptions_spans_path %>" class="nav-item <%= 'active' if current_section == 'exceptions' %>">
+            <i class="bi bi-exclamation-triangle"></i>
+            <span>Exceptions</span>
+          </a>
+
+          <a href="<%= flare.queries_spans_path %>" class="nav-item <%= 'active' if current_section == 'queries' %>">
+            <i class="bi bi-database"></i>
+            <span>Queries</span>
+          </a>
+
+          <a href="<%= flare.cache_spans_path %>" class="nav-item <%= 'active' if current_section == 'cache' %>">
+            <i class="bi bi-archive"></i>
+            <span>Cache</span>
+          </a>
+
+          <a href="<%= flare.views_spans_path %>" class="nav-item <%= 'active' if current_section == 'views' %>">
+            <i class="bi bi-layout-sidebar-inset"></i>
+            <span>Views</span>
+          </a>
+
+          <a href="<%= flare.http_spans_path %>" class="nav-item <%= 'active' if current_section == 'http' %>">
+            <i class="bi bi-globe"></i>
+            <span>HTTP</span>
+          </a>
+
+          <a href="<%= flare.mail_spans_path %>" class="nav-item <%= 'active' if current_section == 'mail' %>">
+            <i class="bi bi-envelope"></i>
+            <span>Mail</span>
+          </a>
+
+          <% if show_redis_tab? %>
+            <a href="<%= flare.redis_spans_path %>" class="nav-item <%= 'active' if current_section == 'redis' %>">
+              <i class="bi bi-layers"></i>
+              <span>Redis</span>
+            </a>
+          <% end %>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="https://www.flippercloud.io?utm_source=flare&utm_medium=dashboard&utm_campaign=sidebar_ad" target="_blank" rel="noopener" class="sidebar-ad">
+          <div class="sidebar-ad-inner">
+            <div class="sidebar-ad-logo">
+              <img src="/flare-assets/images/flipper.png" alt="Flipper">
+            </div>
+            <div class="sidebar-ad-text">
+              <div class="sidebar-ad-title">Flipper</div>
+              Ship features safely.<br>Roll back instantly.
+            </div>
+          </div>
+        </a>
+        <%= button_to flare.clear_data_path, method: :delete, class: "btn-clear", data: { confirm: "Clear all data? This cannot be undone." } do %>
+          <i class="bi bi-trash3"></i>
+          <span>Clear Data</span>
+        <% end %>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <% if flash[:alert] %>
+        <div style="padding: 1.25rem 1.5rem 0;">
+          <div class="alert alert-danger"><%= flash[:alert] %></div>
+        </div>
+      <% end %>
+      <%= yield %>
+    </main>
+  </div>
+  <script>
+    // Handle data-confirm on buttons/forms
+    document.addEventListener('click', function(e) {
+      const button = e.target.closest('[data-confirm]');
+      if (button && !confirm(button.dataset.confirm)) {
+        e.preventDefault();
+      }
+    });
+
+    // Navigate to URL only if user isn't selecting text
+    function navigateIfNotSelecting(url) {
+      const selection = window.getSelection();
+      if (selection && selection.toString().length > 0) {
+        return; // User is selecting text, don't navigate
+      }
+      window.location = url;
+    }
+  </script>
+</body>
+</html>

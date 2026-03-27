@@ -2,7 +2,7 @@
 
 source "https://rubygems.org"
 
-# Specify your gem's dependencies in caboose.gemspec
+# Specify your gem's dependencies in flare.gemspec
 gemspec
 
 gem "irb"

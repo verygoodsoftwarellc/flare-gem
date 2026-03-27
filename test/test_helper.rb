@@ -10,7 +10,7 @@ require "tmpdir"
 require "opentelemetry/sdk"
 
 # Don't load Rails engine for unit tests - just test the core library
-require "caboose/version"
-require "caboose/configuration"
-require "caboose/sqlite_exporter"
-require "caboose/storage"
+require "flare/version"
+require "flare/configuration"
+require "flare/sqlite_exporter"
+require "flare/storage"

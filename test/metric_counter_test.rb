@@ -1,11 +1,11 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/metric_counter"
+require "flare/metric_counter"
 
 class MetricCounterTest < Minitest::Test
   def test_initial_values
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
 
     assert_equal 0, counter.count
     assert_equal 0, counter.sum_ms
@@ -13,7 +13,7 @@ class MetricCounterTest < Minitest::Test
   end
 
   def test_increment_without_error
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
     counter.increment(duration_ms: 100, error: false)
 
     assert_equal 1, counter.count
@@ -22,7 +22,7 @@ class MetricCounterTest < Minitest::Test
   end
 
   def test_increment_with_error
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
     counter.increment(duration_ms: 50, error: true)
 
     assert_equal 1, counter.count
@@ -31,7 +31,7 @@ class MetricCounterTest < Minitest::Test
   end
 
   def test_multiple_increments
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
     counter.increment(duration_ms: 100, error: false)
     counter.increment(duration_ms: 200, error: true)
     counter.increment(duration_ms: 150, error: false)
@@ -42,7 +42,7 @@ class MetricCounterTest < Minitest::Test
   end
 
   def test_to_h
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
     counter.increment(duration_ms: 100, error: false)
     counter.increment(duration_ms: 200, error: true)
 
@@ -56,7 +56,7 @@ class MetricCounterTest < Minitest::Test
   end
 
   def test_thread_safety
-    counter = Caboose::MetricCounter.new
+    counter = Flare::MetricCounter.new
     threads = []
 
     10.times do

@@ -1,6 +1,6 @@
-# Caboose Demo App
+# Flare Demo App
 
-A single-file Rails app for testing Caboose.
+A single-file Rails app for testing Flare.
 
 ## Running the demo
 
@@ -19,7 +19,7 @@ PORT=4000 bundle exec ruby examples/app.rb
 
 Then visit:
 - http://localhost:9999 - Demo app home page
-- http://localhost:9999/caboose - Caboose dashboard
+- http://localhost:9999/flare - Flare dashboard
 
 ## Endpoints
 
@@ -29,6 +29,6 @@ Then visit:
 | `/api` | Simulates SQL query, cache read, and view render |
 | `/slow` | 500ms slow endpoint |
 | `/error` | Raises an exception (for testing error tracking) |
-| `/caboose` | Caboose dashboard |
+| `/flare` | Flare dashboard |
 
-Click around, then check the Caboose dashboard to see the recorded cases and clues.
+Click around, then check the Flare dashboard to see the recorded cases and clues.

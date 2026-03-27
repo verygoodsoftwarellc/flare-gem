@@ -1,35 +1,35 @@
 # frozen_string_literal: true
 
-# Quick smoke test: submit metrics from the Caboose client to a running caboose-web instance.
+# Quick smoke test: submit metrics from the Flare client to a running flare-web instance.
 #
 # Usage:
 #   bundle exec ruby examples/submit_metrics_test.rb
 #
 # Prerequisites:
-#   - caboose-web running locally (e.g. on Conductor port 55030)
+#   - flare-web running locally (e.g. on Conductor port 55030)
 #
 # You can override the defaults with env vars:
-#   CABOOSE_TEST_ENDPOINT  - base URL of caboose-web (default: http://localhost:55030)
-#   CABOOSE_TEST_API_KEY   - bearer token (default: the seed token)
-#   CABOOSE_TEST_PROJECT   - project key (default: flipper-cloud)
-#   CABOOSE_TEST_ENV       - environment key (default: production)
+#   FLARE_TEST_ENDPOINT  - base URL of flare-web (default: http://localhost:55030)
+#   FLARE_TEST_API_KEY   - bearer token (default: the seed token)
+#   FLARE_TEST_PROJECT   - project key (default: flipper-cloud)
+#   FLARE_TEST_ENV       - environment key (default: production)
 
 require "bundler/setup"
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
-require "caboose"
-require "caboose/backoff_policy"
-require "caboose/metric_submitter"
+require "flare"
+require "flare/backoff_policy"
+require "flare/metric_submitter"
 
-base = ENV.fetch("CABOOSE_TEST_ENDPOINT", "http://localhost:55030")
-project = ENV.fetch("CABOOSE_TEST_PROJECT", "flipper-cloud")
-environment = ENV.fetch("CABOOSE_TEST_ENV", "production")
-api_key = ENV.fetch("CABOOSE_TEST_API_KEY", "sRQyUpiVhUedfJPDoC2tSGK9")
+base = ENV.fetch("FLARE_TEST_ENDPOINT", "http://localhost:55030")
+project = ENV.fetch("FLARE_TEST_PROJECT", "flipper-cloud")
+environment = ENV.fetch("FLARE_TEST_ENV", "production")
+api_key = ENV.fetch("FLARE_TEST_API_KEY", "sRQyUpiVhUedfJPDoC2tSGK9")
 
 # Build the full endpoint with query params
 base = base.chomp("/")
 endpoint = "#{base}/api/metrics?project=#{project}&environment=#{environment}"
 
-puts "=== Caboose MetricSubmitter smoke test ==="
+puts "=== Flare MetricSubmitter smoke test ==="
 puts "Endpoint: #{endpoint}"
 puts
 
@@ -38,7 +38,7 @@ now = Time.now.utc
 bucket = Time.utc(now.year, now.month, now.day, now.hour, now.min) # truncate to minute
 
 drained = {
-  Caboose::MetricKey.new(
+  Flare::MetricKey.new(
     bucket: bucket,
     namespace: "web",
     service: "rails",
@@ -46,7 +46,7 @@ drained = {
     operation: "index"
   ) => { count: 12, sum_ms: 345, error_count: 0 },
 
-  Caboose::MetricKey.new(
+  Flare::MetricKey.new(
     bucket: bucket,
     namespace: "web",
     service: "rails",
@@ -54,7 +54,7 @@ drained = {
     operation: "show"
   ) => { count: 8, sum_ms: 620, error_count: 1 },
 
-  Caboose::MetricKey.new(
+  Flare::MetricKey.new(
     bucket: bucket,
     namespace: "db",
     service: "postgres",
@@ -62,7 +62,7 @@ drained = {
     operation: "SELECT"
   ) => { count: 20, sum_ms: 88, error_count: 0 },
 
-  Caboose::MetricKey.new(
+  Flare::MetricKey.new(
     bucket: bucket,
     namespace: "job",
     service: "rails",
@@ -70,7 +70,7 @@ drained = {
     operation: "perform"
   ) => { count: 3, sum_ms: 1500, error_count: 0 },
 
-  Caboose::MetricKey.new(
+  Flare::MetricKey.new(
     bucket: bucket,
     namespace: "http",
     service: "api.stripe.com",
@@ -79,7 +79,7 @@ drained = {
   ) => { count: 5, sum_ms: 430, error_count: 2 }
 }
 
-submitter = Caboose::MetricSubmitter.new(
+submitter = Flare::MetricSubmitter.new(
   endpoint: endpoint,
   api_key: api_key,
   open_timeout: 5,
@@ -99,7 +99,7 @@ if error
 else
   puts "SUCCESS: #{count} metrics accepted by the server"
   puts
-  puts "Check caboose-web to see the metrics appear under:"
+  puts "Check flare-web to see the metrics appear under:"
   puts "  Project: flipper-cloud"
   puts "  Environment: production"
 end

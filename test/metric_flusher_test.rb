@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/metric_key"
-require "caboose/metric_storage"
-require "caboose/metric_flusher"
+require "flare/metric_key"
+require "flare/metric_storage"
+require "flare/metric_flusher"
 
 class MetricFlusherTest < Minitest::Test
   def setup
-    @storage = Caboose::MetricStorage.new
+    @storage = Flare::MetricStorage.new
     @submitter = MockSubmitter.new
-    @flusher = Caboose::MetricFlusher.new(
+    @flusher = Flare::MetricFlusher.new(
       storage: @storage,
       submitter: @submitter,
       interval: 0.1 # 100ms for fast tests
@@ -21,7 +21,7 @@ class MetricFlusherTest < Minitest::Test
   end
 
   def test_default_interval
-    flusher = Caboose::MetricFlusher.new(storage: @storage, submitter: @submitter)
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: @submitter)
     assert_equal 60, flusher.interval
   end
 
@@ -89,14 +89,14 @@ class MetricFlusherTest < Minitest::Test
   end
 
   def test_flush_now_handles_nil_storage
-    flusher = Caboose::MetricFlusher.new(storage: nil, submitter: @submitter, interval: 1)
+    flusher = Flare::MetricFlusher.new(storage: nil, submitter: @submitter, interval: 1)
     count = flusher.flush_now
 
     assert_equal 0, count
   end
 
   def test_flush_now_handles_nil_submitter
-    flusher = Caboose::MetricFlusher.new(storage: @storage, submitter: nil, interval: 1)
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: nil, interval: 1)
     count = flusher.flush_now
 
     assert_equal 0, count
@@ -105,7 +105,7 @@ class MetricFlusherTest < Minitest::Test
   private
 
   def create_key(namespace, service, target, operation)
-    Caboose::MetricKey.new(
+    Flare::MetricKey.new(
       bucket: Time.now.utc,
       namespace: namespace,
       service: service,

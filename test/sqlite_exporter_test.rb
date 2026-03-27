@@ -1,20 +1,20 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "caboose/sqlite_exporter"
-require "caboose/storage/sqlite"
+require "flare/sqlite_exporter"
+require "flare/storage/sqlite"
 
 class SQLiteExporterTest < Minitest::Test
   def setup
     @tmp_dir = Dir.mktmpdir
     @db_path = File.join(@tmp_dir, "test.sqlite3")
-    @exporter = Caboose::SQLiteExporter.new(@db_path)
+    @exporter = Flare::SQLiteExporter.new(@db_path)
   end
 
   def teardown
     FileUtils.rm_rf(@tmp_dir)
     # Clear thread-local connection
-    Thread.current[:caboose_sqlite_db] = nil
+    Thread.current[:flare_sqlite_db] = nil
   end
 
   def test_creates_database_on_first_export
@@ -27,27 +27,27 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
-    assert_includes tables, "caboose_spans"
+    assert_includes tables, "flare_spans"
   end
 
   def test_creates_events_table_on_first_export
     @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
-    assert_includes tables, "caboose_events"
+    assert_includes tables, "flare_events"
   end
 
   def test_creates_properties_table_on_first_export
     @exporter.export([mock_span_data])
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").map { |r| r["name"] }
-    assert_includes tables, "caboose_properties"
+    assert_includes tables, "flare_properties"
   end
 
   def test_export_returns_success
     span_data = mock_span_data
     result = @exporter.export([span_data])
-    assert_equal Caboose::SQLiteExporter::SUCCESS, result
+    assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
   def test_export_creates_span_record
@@ -61,7 +61,7 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    spans = db.execute("SELECT * FROM caboose_spans")
+    spans = db.execute("SELECT * FROM flare_spans")
 
     assert_equal 1, spans.size
     assert_equal "GET /users", spans.first["name"]
@@ -83,7 +83,7 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    properties = db.execute("SELECT * FROM caboose_properties WHERE owner_type = 'Caboose::Span'")
+    properties = db.execute("SELECT * FROM flare_properties WHERE owner_type = 'Flare::Span'")
 
     assert_equal 3, properties.size
 
@@ -113,26 +113,26 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    events = db.execute("SELECT * FROM caboose_events")
+    events = db.execute("SELECT * FROM flare_events")
 
     assert_equal 1, events.size
     assert_equal "exception", events.first["name"]
 
     # Check event properties
-    event_props = db.execute("SELECT * FROM caboose_properties WHERE owner_type = 'Caboose::Event'")
+    event_props = db.execute("SELECT * FROM flare_properties WHERE owner_type = 'Flare::Event'")
     assert_equal 2, event_props.size
 
     type_prop = event_props.find { |p| p["key"] == "exception.type" }
     assert_equal '"RuntimeError"', type_prop["value"]
   end
 
-  def test_export_ignores_caboose_spans
-    span_data = mock_span_data(name: "Caboose::SomeInternal")
+  def test_export_ignores_flare_spans
+    span_data = mock_span_data(name: "Flare::SomeInternal")
 
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    spans = db.execute("SELECT * FROM caboose_spans")
+    spans = db.execute("SELECT * FROM flare_spans")
 
     assert_equal 0, spans.size
   end
@@ -144,7 +144,7 @@ class SQLiteExporterTest < Minitest::Test
     )
 
     result = @exporter.export([span_data])
-    assert_equal Caboose::SQLiteExporter::SUCCESS, result
+    assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
   def test_export_handles_nil_events
@@ -154,7 +154,7 @@ class SQLiteExporterTest < Minitest::Test
     )
 
     result = @exporter.export([span_data])
-    assert_equal Caboose::SQLiteExporter::SUCCESS, result
+    assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
   def test_export_skips_nil_attribute_values
@@ -169,7 +169,7 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    properties = db.execute("SELECT * FROM caboose_properties WHERE owner_type = 'Caboose::Span'")
+    properties = db.execute("SELECT * FROM flare_properties WHERE owner_type = 'Flare::Span'")
 
     assert_equal 1, properties.size
     assert_equal "http.method", properties.first["key"]
@@ -177,12 +177,12 @@ class SQLiteExporterTest < Minitest::Test
 
   def test_force_flush_returns_success
     result = @exporter.force_flush
-    assert_equal Caboose::SQLiteExporter::SUCCESS, result
+    assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
   def test_shutdown_returns_success
     result = @exporter.shutdown
-    assert_equal Caboose::SQLiteExporter::SUCCESS, result
+    assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
   def test_determines_value_types_correctly
@@ -201,7 +201,7 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span_data])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    properties = db.execute("SELECT key, value_type FROM caboose_properties ORDER BY key")
+    properties = db.execute("SELECT key, value_type FROM flare_properties ORDER BY key")
 
     prop_types = properties.each_with_object({}) { |p, h| h[p["key"]] = p["value_type"] }
 
@@ -220,7 +220,7 @@ class SQLiteExporterTest < Minitest::Test
     @exporter.export([span1, span2])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    spans = db.execute("SELECT * FROM caboose_spans ORDER BY name")
+    spans = db.execute("SELECT * FROM flare_spans ORDER BY name")
 
     assert_equal 2, spans.size
     assert_equal "GET /users", spans[0]["name"]
@@ -229,7 +229,7 @@ class SQLiteExporterTest < Minitest::Test
 
   def test_creates_parent_directory_if_missing
     nested_path = File.join(@tmp_dir, "nested", "dir", "test.sqlite3")
-    exporter = Caboose::SQLiteExporter.new(nested_path)
+    exporter = Flare::SQLiteExporter.new(nested_path)
     exporter.export([mock_span_data])
 
     assert File.exist?(nested_path)
