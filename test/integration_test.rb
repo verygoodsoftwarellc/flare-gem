@@ -62,17 +62,17 @@ class IntegrationTest < Minitest::Test
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["http.method", "\"#{method}\"", 0, "Flare::Span", span_id, now, now])
+    db.execute(<<~SQL, ["http.request.method", "\"#{method}\"", 0, "Flare::Span", span_id, now, now])
       INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["http.status_code", status.to_s, 1, "Flare::Span", span_id, now, now])
+    db.execute(<<~SQL, ["http.response.status_code", status.to_s, 1, "Flare::Span", span_id, now, now])
       INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL
 
-    db.execute(<<~SQL, ["http.target", "\"/users\"", 0, "Flare::Span", span_id, now, now])
+    db.execute(<<~SQL, ["url.path", "\"/users\"", 0, "Flare::Span", span_id, now, now])
       INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     SQL

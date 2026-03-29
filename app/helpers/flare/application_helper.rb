@@ -53,8 +53,8 @@ module Flare
         { primary: primary, secondary: nil }
       when "http"
         full_url = props["http.url"] || ""
-        target = props["http.target"] || ""
-        host = props["http.host"] || props["net.peer.name"] || props["peer.service"]
+        target = props["url.path"] || props["http.target"] || ""
+        host = props["server.address"] || props["http.host"] || props["net.peer.name"] || props["peer.service"]
         uri = URI.parse(full_url) rescue nil
         if uri && uri.host
           domain = uri.host
@@ -64,8 +64,8 @@ module Flare
           domain = host
           path = target.presence || full_url
         end
-        method = props["http.method"]
-        status = props["http.status_code"]
+        method = props["http.request.method"] || props["http.method"]
+        status = props["http.response.status_code"] || props["http.status_code"]
         { primary: path.to_s.truncate(100), secondary: domain, http_method: method, http_status: status }
       when "mail"
         mailer = props["mailer"]

@@ -1,9 +1,9 @@
 <%
   # Get root span properties
   root_props = @root_span ? @root_span[:properties] : {}
-  http_method = root_props["http.method"]
-  http_status = root_props["http.status_code"]
-  http_target = root_props["http.target"]
+  http_method = root_props["http.request.method"]
+  http_status = root_props["http.response.status_code"]
+  http_target = root_props["url.path"]
   controller = root_props["code.namespace"]
   action = root_props["code.function"]
 
@@ -51,8 +51,8 @@
 
         # Properties to exclude from "other" section (already shown elsewhere)
         shown_keys = %w[
-          http.method http.status_code http.target http.scheme http.host
-          code.namespace code.function http.route http.user_agent
+          http.request.method http.response.status_code url.path url.scheme server.address
+          code.namespace code.function http.route user_agent.original
         ]
         other_props = root_props.reject { |k, v| shown_keys.include?(k) || v.is_a?(Hash) || v.is_a?(Array) }
       %>
@@ -260,8 +260,8 @@
                     span[:name]
                   end
                 elsif category == "http"
-                  url = props["http.url"] || props["http.target"]
-                  method = props["http.method"]
+                  url = props["http.url"] || props["url.path"]
+                  method = props["http.request.method"]
                   "#{method} #{url}".strip.presence || span[:name]
                 elsif category == "controller"
                   ns = props["code.namespace"]
@@ -387,7 +387,7 @@
         extra = props['identifier'].replace(/.*\/app\/views\//, '');
       } else if (category === 'http') {
         name = 'HTTP';
-        extra = ((props['http.method'] || '') + ' ' + (props['http.url'] || props['http.target'] || '')).trim();
+        extra = ((props['http.request.method'] || '') + ' ' + (props['http.url'] || props['url.path'] || '')).trim();
       }
 
       let line = offset.padStart(8) + ' | ' + duration.padStart(8) + ' | ' + name;

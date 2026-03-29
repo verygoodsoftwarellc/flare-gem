@@ -85,9 +85,9 @@ module Flare
                  controller_prop.value as controller,
                  action_prop.value as action
           FROM flare_spans s
-          LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.method'
-          LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.status_code'
-          LEFT JOIN flare_properties target_prop ON target_prop.owner_type = 'Flare::Span' AND target_prop.owner_id = s.id AND target_prop.key = 'http.target'
+          LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.request.method'
+          LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.response.status_code'
+          LEFT JOIN flare_properties target_prop ON target_prop.owner_type = 'Flare::Span' AND target_prop.owner_id = s.id AND target_prop.key = 'url.path'
           LEFT JOIN flare_properties controller_prop ON controller_prop.owner_type = 'Flare::Span' AND controller_prop.owner_id = s.id AND controller_prop.key = 'code.namespace'
           LEFT JOIN flare_properties action_prop ON action_prop.owner_type = 'Flare::Span' AND action_prop.owner_id = s.id AND action_prop.key = 'code.function'
           #{where_clause}
@@ -396,8 +396,8 @@ module Flare
         row = query_one(<<~SQL, values)
           SELECT COUNT(*) as count
           FROM flare_spans s
-          LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.method'
-          LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.status_code'
+          LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.request.method'
+          LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.response.status_code'
           LEFT JOIN flare_properties controller_prop ON controller_prop.owner_type = 'Flare::Span' AND controller_prop.owner_id = s.id AND controller_prop.key = 'code.namespace'
           #{where_clause}
           AND method_prop.value IS NOT NULL

@@ -220,8 +220,8 @@
                     span[:name]
                   end
                 elsif category == "http"
-                  url = props["http.url"] || props["http.target"]
-                  method = props["http.method"]
+                  url = props["http.url"] || props["url.path"]
+                  method = props["http.request.method"]
                   "#{method} #{url}".strip.presence || span[:name]
                 elsif category == "controller"
                   ns = props["code.namespace"]
