@@ -34,25 +34,25 @@ module Flare
         if status
           case status
           when "2xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "2%"
           when "3xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "3%"
           when "4xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "4%"
           when "5xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "5%"
           else
-            conditions << "status_prop.value = ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) = ?"
             values << status.to_s
           end
         end
 
         if method
-          conditions << "method_prop.value = ?"
+          conditions << "COALESCE(method_prop.value, method_prop_old.value) = ?"
           values << "\"#{method}\""
         end
 
@@ -79,19 +79,22 @@ module Flare
 
         rows = query_all(<<~SQL, values)
           SELECT s.*,
-                 method_prop.value as http_method,
-                 status_prop.value as http_status,
-                 target_prop.value as http_target,
+                 COALESCE(method_prop.value, method_prop_old.value) as http_method,
+                 COALESCE(status_prop.value, status_prop_old.value) as http_status,
+                 COALESCE(target_prop.value, target_prop_old.value) as http_target,
                  controller_prop.value as controller,
                  action_prop.value as action
           FROM flare_spans s
           LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.request.method'
+          LEFT JOIN flare_properties method_prop_old ON method_prop_old.owner_type = 'Flare::Span' AND method_prop_old.owner_id = s.id AND method_prop_old.key = 'http.method'
           LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.response.status_code'
+          LEFT JOIN flare_properties status_prop_old ON status_prop_old.owner_type = 'Flare::Span' AND status_prop_old.owner_id = s.id AND status_prop_old.key = 'http.status_code'
           LEFT JOIN flare_properties target_prop ON target_prop.owner_type = 'Flare::Span' AND target_prop.owner_id = s.id AND target_prop.key = 'url.path'
+          LEFT JOIN flare_properties target_prop_old ON target_prop_old.owner_type = 'Flare::Span' AND target_prop_old.owner_id = s.id AND target_prop_old.key = 'http.target'
           LEFT JOIN flare_properties controller_prop ON controller_prop.owner_type = 'Flare::Span' AND controller_prop.owner_id = s.id AND controller_prop.key = 'code.namespace'
           LEFT JOIN flare_properties action_prop ON action_prop.owner_type = 'Flare::Span' AND action_prop.owner_id = s.id AND action_prop.key = 'code.function'
           #{where_clause}
-          AND method_prop.value IS NOT NULL
+          AND COALESCE(method_prop.value, method_prop_old.value) IS NOT NULL
           ORDER BY s.created_at DESC
           LIMIT ? OFFSET ?
         SQL
@@ -352,25 +355,25 @@ module Flare
         if status
           case status
           when "2xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "2%"
           when "3xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "3%"
           when "4xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "4%"
           when "5xx"
-            conditions << "status_prop.value LIKE ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) LIKE ?"
             values << "5%"
           else
-            conditions << "status_prop.value = ?"
+            conditions << "COALESCE(status_prop.value, status_prop_old.value) = ?"
             values << status.to_s
           end
         end
 
         if method
-          conditions << "method_prop.value = ?"
+          conditions << "COALESCE(method_prop.value, method_prop_old.value) = ?"
           values << "\"#{method}\""
         end
 
@@ -397,10 +400,12 @@ module Flare
           SELECT COUNT(*) as count
           FROM flare_spans s
           LEFT JOIN flare_properties method_prop ON method_prop.owner_type = 'Flare::Span' AND method_prop.owner_id = s.id AND method_prop.key = 'http.request.method'
+          LEFT JOIN flare_properties method_prop_old ON method_prop_old.owner_type = 'Flare::Span' AND method_prop_old.owner_id = s.id AND method_prop_old.key = 'http.method'
           LEFT JOIN flare_properties status_prop ON status_prop.owner_type = 'Flare::Span' AND status_prop.owner_id = s.id AND status_prop.key = 'http.response.status_code'
+          LEFT JOIN flare_properties status_prop_old ON status_prop_old.owner_type = 'Flare::Span' AND status_prop_old.owner_id = s.id AND status_prop_old.key = 'http.status_code'
           LEFT JOIN flare_properties controller_prop ON controller_prop.owner_type = 'Flare::Span' AND controller_prop.owner_id = s.id AND controller_prop.key = 'code.namespace'
           #{where_clause}
-          AND method_prop.value IS NOT NULL
+          AND COALESCE(method_prop.value, method_prop_old.value) IS NOT NULL
         SQL
 
         row ? row["count"] : 0
