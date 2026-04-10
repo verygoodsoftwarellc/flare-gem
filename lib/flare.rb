@@ -176,6 +176,12 @@ module Flare
 
             configuration.ignore_request.call(request)
           }
+        },
+        # Name Sidekiq job spans after the worker class (e.g. "MyWorker
+        # process") instead of the upstream default of the queue name
+        # ("default process"), matching how ActiveJob spans are named.
+        "OpenTelemetry::Instrumentation::Sidekiq" => {
+          span_naming: :job_class,
         }
       )
     end
