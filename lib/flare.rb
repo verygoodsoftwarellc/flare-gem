@@ -141,7 +141,7 @@ module Flare
       "app"
     end
 
-    # Require only the instrumentations we want
+    # Require flare's bundled instrumentations
     require "opentelemetry-instrumentation-rack"
     require "opentelemetry-instrumentation-net_http"
     require "opentelemetry-instrumentation-active_support"
@@ -165,19 +165,19 @@ module Flare
         log "Spans enabled (database=#{configuration.database_path})"
       end
 
-      # Configure specific instrumentations
-      c.use "OpenTelemetry::Instrumentation::Rack",
-        untraced_requests: ->(env) {
-          request = Rack::Request.new(env)
-          return true if request.path.start_with?("/flare")
+      # Auto-detect and install all OTel instrumentation gems in the bundle.
+      # Apps can add gems like opentelemetry-instrumentation-sidekiq to their
+      # Gemfile and they'll be picked up automatically.
+      c.use_all(
+        "OpenTelemetry::Instrumentation::Rack" => {
+          untraced_requests: ->(env) {
+            request = Rack::Request.new(env)
+            return true if request.path.start_with?("/flare")
 
-          configuration.ignore_request.call(request)
+            configuration.ignore_request.call(request)
+          }
         }
-      c.use "OpenTelemetry::Instrumentation::Net::HTTP"
-      c.use "OpenTelemetry::Instrumentation::ActiveSupport"
-      c.use "OpenTelemetry::Instrumentation::ActionPack" if defined?(ActionController)
-      c.use "OpenTelemetry::Instrumentation::ActionView" if defined?(ActionView)
-      c.use "OpenTelemetry::Instrumentation::ActiveJob" if defined?(ActiveJob)
+      )
     end
 
     # Subscribe to common ActiveSupport notification patterns
