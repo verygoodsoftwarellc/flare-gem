@@ -13,7 +13,12 @@ module Flare
     DEFAULT_READ_TIMEOUT  = 5
     DEFAULT_WRITE_TIMEOUT = 5
 
-    Response = Struct.new(:code, :body, keyword_init: true)
+    Response = Struct.new(:code, :body, :headers, keyword_init: true) do
+      def header(name)
+        return nil unless headers
+        headers[name] || headers[name.downcase] || headers[name.upcase]
+      end
+    end
 
     def initialize(open_timeout: DEFAULT_OPEN_TIMEOUT,
                    read_timeout: DEFAULT_READ_TIMEOUT,
@@ -21,6 +26,10 @@ module Flare
       @open_timeout  = open_timeout
       @read_timeout  = read_timeout
       @write_timeout = write_timeout
+    end
+
+    def get(url, headers = {})
+      request(url, nil, headers, Net::HTTP::Get)
     end
 
     def put(url, body, headers = {})
@@ -43,10 +52,11 @@ module Flare
 
       req = klass.new(uri.request_uri == "" ? "/" : uri.request_uri)
       headers.each { |k, v| req[k] = v }
-      req.body = body
+      req.body = body if body
 
       response = http.request(req)
-      Response.new(code: response.code.to_s, body: response.body)
+      hash = response.each_header.to_h
+      Response.new(code: response.code.to_s, body: response.body, headers: hash)
     end
   end
 end
