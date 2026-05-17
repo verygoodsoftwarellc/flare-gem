@@ -12,9 +12,14 @@ module Flare
 
     # Spans: detailed trace data stored in SQLite (default: development only)
     # Metrics: aggregated counters in memory, flushed periodically (default: production only)
+    # Tracing: server-controlled per-route trace sampling. Polls /api/rules
+    # for which routes/jobs to capture, ships matched traces direct to R2
+    # via presigned URLs, self-notifies POST /api/traces.
     attr_accessor :spans_enabled
     attr_accessor :metrics_enabled
     attr_accessor :metrics_flush_interval # seconds between flushes (default: 60)
+    attr_accessor :tracing_enabled
+    attr_accessor :tracing_poll_interval  # seconds between /api/rules polls (default: 30)
 
     # Metrics HTTP submission settings
     attr_accessor :url        # URL of the Flare metrics service
@@ -53,6 +58,8 @@ module Flare
       @spans_enabled = rails_development?
       @metrics_enabled = !rails_test?
       @metrics_flush_interval = 60 # seconds
+      @tracing_enabled = !rails_test?
+      @tracing_poll_interval = 30  # seconds
 
       # Metrics HTTP submission defaults
       @url = ENV.fetch("FLARE_URL", credentials_url || "https://flare.am")
@@ -65,6 +72,11 @@ module Flare
     def metrics_submission_configured?
       !@url.nil? && !@url.empty? &&
         !@key.nil? && !@key.empty?
+    end
+
+    # Tracing reuses the same endpoint + key as metrics.
+    def tracing_submission_configured?
+      @tracing_enabled && metrics_submission_configured?
     end
 
     def database_path
