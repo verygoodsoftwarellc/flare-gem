@@ -189,36 +189,6 @@ module Flare
     OpenTelemetry::SDK.configure do |c|
       c.service_name = service_name
 
-      # Trace sampling: server-controlled per-route capture. The sampler runs
-      # at span start; for routes it can't decide there (Rails web spans get
-      # their controller#action attributes set post-routing) the marker +
-      # WebMarkerSubscriber handle it. local_parent_not_sampled is the tiny
-      # ALWAYS_RECORD_ONLY so children of unsampled parents stay recording
-      # (default ALWAYS_OFF would turn them into NoOp spans).
-      if configuration.tracing_enabled
-        @sampler         = Sampler.new
-        @marker          = Marker.new
-        @upload_url_pool = UploadUrlPool.new
-
-        c.sampler = OpenTelemetry::SDK::Trace::Samplers.parent_based(
-          root:                      @sampler,
-          local_parent_not_sampled:  ALWAYS_RECORD_ONLY
-        )
-
-        trace_exporter = TraceExporter.new(
-          pool:        @upload_url_pool,
-          notify_url:  "#{configuration.url.to_s.chomp('/')}/api/traces",
-          api_key:     configuration.key,
-          project:     service_name,
-          environment: rails_env_name
-        )
-
-        c.add_span_processor(
-          FilteringSpanProcessor.new(exporter: trace_exporter, marker: @marker)
-        )
-        log "Tracing enabled (poll=#{configuration.tracing_poll_interval}s)"
-      end
-
       # Spans: detailed trace data stored in SQLite
       if configuration.spans_enabled && exporter
         c.add_span_processor(span_processor)
@@ -254,12 +224,45 @@ module Flare
       subscribe_to_notifications
     end
 
-    # Path 2 trace marking. Only needed for Rails web requests, where
-    # the controller/action isn't on the rack span at start. Jobs and
-    # any framework that sets code.namespace at span start go through
-    # the sampler directly.
-    if configuration.tracing_enabled && defined?(ActiveSupport::Notifications) && @sampler && @marker
-      WebMarkerSubscriber.new(sampler: @sampler, marker: @marker).start
+    # Trace sampling: server-controlled per-route capture. The sampler runs
+    # at span start; for routes it can't decide there (Rails web spans get
+    # their controller#action attributes set post-routing) the marker +
+    # WebMarkerSubscriber handle it. local_parent_not_sampled is the tiny
+    # ALWAYS_RECORD_ONLY so children of unsampled parents stay recording
+    # (default ALWAYS_OFF would turn them into NoOp spans).
+    #
+    # Sampler is set on the tracer_provider AFTER SDK.configure -- the SDK's
+    # Configurator block doesn't expose a `sampler=`; the provider does.
+    if configuration.tracing_enabled
+      @sampler         = Sampler.new
+      @marker          = Marker.new
+      @upload_url_pool = UploadUrlPool.new
+
+      OpenTelemetry.tracer_provider.sampler =
+        OpenTelemetry::SDK::Trace::Samplers.parent_based(
+          root:                     @sampler,
+          local_parent_not_sampled: ALWAYS_RECORD_ONLY
+        )
+
+      trace_exporter = TraceExporter.new(
+        pool:        @upload_url_pool,
+        notify_url:  "#{configuration.url.to_s.chomp('/')}/api/traces",
+        api_key:     configuration.key,
+        project:     service_name,
+        environment: rails_env_name
+      )
+
+      OpenTelemetry.tracer_provider.add_span_processor(
+        FilteringSpanProcessor.new(exporter: trace_exporter, marker: @marker)
+      )
+
+      # Path 2 trace marking. Rails-only -- in non-Rails contexts the
+      # subscriber would never fire but creating it is harmless.
+      if defined?(ActiveSupport::Notifications)
+        WebMarkerSubscriber.new(sampler: @sampler, marker: @marker).start
+      end
+
+      log "Tracing enabled (poll=#{configuration.tracing_poll_interval}s)"
     end
 
     at_exit do
