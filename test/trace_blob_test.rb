@@ -60,6 +60,16 @@ class TraceBlobTest < Minitest::Test
     assert_equal 42, h["trace_rule_id"]
   end
 
+  def test_root_name_is_truncated_to_server_limit
+    spans = [
+      span("x" * 300, id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 10_000_000)
+    ]
+
+    h = Flare::TraceBlob.build(trace_id: ("\x01".b * 16), spans: spans).to_h
+
+    assert_equal 255, h["root_name"].length
+  end
+
   def test_returns_nil_when_no_spans
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: [])
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: nil)

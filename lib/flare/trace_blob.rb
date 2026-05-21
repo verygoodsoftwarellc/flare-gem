@@ -23,6 +23,7 @@ module Flare
   # sets it on the rack owner span via WebMarkerSubscriber).
   class TraceBlob
     ZERO_SPAN_ID = ("\x00".b * 8).freeze
+    ROOT_NAME_LIMIT = 255
 
     def self.build(trace_id:, spans:)
       return nil if spans.nil? || spans.empty?
@@ -39,7 +40,7 @@ module Flare
       {
         "trace_id"      => hexify(@trace_id),
         "trace_rule_id" => rule_id_from_spans,
-        "root_name"     => root&.name,
+        "root_name"     => root_name(root),
         "started_at"    => iso(root&.start_timestamp),
         "duration_ms"   => duration_ms(root),
         "spans"         => @spans.map { |s| span_to_h(s) }
@@ -65,6 +66,10 @@ module Flare
         return value if value
       end
       nil
+    end
+
+    def root_name(root)
+      root&.name&.to_s&.slice(0, ROOT_NAME_LIMIT)
     end
 
     def span_to_h(span)
