@@ -131,6 +131,15 @@ rake test
 
 Tests use Minitest. The test helper loads core library classes directly without Rails to keep unit tests fast. Use `RAILS_VERSION` env var to test against different Rails versions.
 
+## Releasing
+
+1. Bump `lib/flare/version.rb` and merge to `main`.
+2. On `main`: `git tag vX.Y.Z && git push --tags`.
+3. `gh release create vX.Y.Z --generate-notes` — drafts release notes from merged PRs. Edit if needed, then publish.
+4. `gem build flare.gemspec && gem push flare-X.Y.Z.gem`.
+
+`CHANGELOG.md` just points to GitHub Releases — don't maintain it by hand.
+
 ## File Structure
 
 - `lib/flare.rb` - main module, OTel configuration, notification subscriptions
