@@ -147,6 +147,11 @@ class SamplerTest < Minitest::Test
   def high_trace_id = "\xff" * 16
 
   def mock_parent_context(tracestate)
-    Object.new.tap { |o| o.define_singleton_method(:trace_state) { tracestate } }
+    span_context = OpenTelemetry::Trace::SpanContext.new(
+      trace_id: "\x01".b * 16,
+      span_id: "\x02".b * 8,
+      tracestate: tracestate
+    )
+    OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(span_context))
   end
 end

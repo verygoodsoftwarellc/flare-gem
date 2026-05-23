@@ -49,13 +49,7 @@ module Flare
     end
 
     def should_sample?(trace_id:, parent_context:, links:, name:, kind:, attributes:)
-      # OTel propagators call .empty? on tracestate during outgoing HTTP
-      # injection -- nil blows up. Default to the empty Tracestate.
-      tracestate = if parent_context.respond_to?(:trace_state) && parent_context.trace_state
-        parent_context.trace_state
-      else
-        OpenTelemetry::Trace::Tracestate::DEFAULT
-      end
+      tracestate = tracestate_from(parent_context)
 
       rules.each do |rule|
         next unless matches?(rule, attributes)
@@ -84,6 +78,11 @@ module Flare
     end
 
     private
+
+    def tracestate_from(parent_context)
+      OpenTelemetry::Trace.current_span(parent_context).context.tracestate ||
+        OpenTelemetry::Trace::Tracestate::DEFAULT
+    end
 
     def matches?(rule, attributes)
       return false if attributes.nil?
@@ -117,13 +116,8 @@ module Flare
     Result   = OpenTelemetry::SDK::Trace::Samplers::Result
 
     def should_sample?(parent_context: nil, **)
-      # OTel propagators call .empty? on tracestate during outgoing HTTP
-      # injection -- nil blows up. Default to the empty Tracestate.
-      tracestate = if parent_context.respond_to?(:trace_state) && parent_context.trace_state
-        parent_context.trace_state
-      else
+      tracestate = OpenTelemetry::Trace.current_span(parent_context).context.tracestate ||
         OpenTelemetry::Trace::Tracestate::DEFAULT
-      end
       Result.new(decision: Decision::RECORD_ONLY, tracestate: tracestate)
     end
 

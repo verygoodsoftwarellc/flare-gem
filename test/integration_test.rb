@@ -128,6 +128,27 @@ class IntegrationTest < Minitest::Test
     span&.finish if span&.respond_to?(:finish)
   end
 
+  def test_tracing_sampler_does_not_export_just_because_remote_parent_is_sampled
+    prepare_tracing_bootstrap
+    Flare.setup_tracing_components
+
+    tracer = OpenTelemetry.tracer_provider.tracer("flare-test")
+    remote_context = OpenTelemetry::Trace::SpanContext.new(
+      trace_id: "\x01".b * 16,
+      span_id: "\x02".b * 8,
+      trace_flags: OpenTelemetry::Trace::TraceFlags::SAMPLED,
+      remote: true
+    )
+    parent = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(remote_context))
+
+    span = tracer.start_span("GET /users", kind: :server, with_parent: parent)
+
+    assert span.recording?
+    refute span.context.trace_flags.sampled?
+  ensure
+    span&.finish if span&.respond_to?(:finish)
+  end
+
   def create_request_span(trace_id:, name: "GET /users", method: "GET", status: 200, controller: "UsersController", action: "index")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     now = Time.now.iso8601(6)

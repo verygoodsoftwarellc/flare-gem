@@ -291,6 +291,7 @@ module Flare
     OpenTelemetry.tracer_provider.sampler =
       OpenTelemetry::SDK::Trace::Samplers.parent_based(
         root: @sampler,
+        remote_parent_sampled: ALWAYS_RECORD_ONLY,
         remote_parent_not_sampled: ALWAYS_RECORD_ONLY,
         local_parent_not_sampled: ALWAYS_RECORD_ONLY
       )
