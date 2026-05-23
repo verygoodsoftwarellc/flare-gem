@@ -259,6 +259,11 @@ module Flare
         return if @pid == $$
 
         @pid = $$
+        @pending_by_trace.clear
+        @trace_order.clear
+        @ready_queue.clear
+        @delayed_ready_by_trace.clear
+        @pending_count = 0
         @stopped = false
         start_worker
       end

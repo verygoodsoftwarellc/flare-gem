@@ -162,6 +162,34 @@ class FilteringSpanProcessorTest < Minitest::Test
     FileUtils.rm_f(exporter&.path)
   end
 
+  # Without buffer clearing on fork, the child inherits the parent's pending
+  # spans and re-exports them — producing duplicate R2 uploads.
+  def test_clears_inherited_buffers_after_fork
+    exporter = RecordingExporter.new(path: Tempfile.new("flare-trace-export").path)
+    processor = Flare::FilteringSpanProcessor.new(
+      exporter:       exporter,
+      marker:         @marker,
+      flush_interval: 60,
+      logger:         Logger.new(IO::NULL)
+    )
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
+
+    pid = fork do
+      processor.on_finish(span(trace_id: "t2", span_id: "s2", sampled: true, parent_span_id: nil))
+      processor.force_flush
+      exit!
+    end
+    Process.wait(pid)
+    processor.force_flush
+
+    exported_span_count = File.readlines(exporter.path).map(&:to_i).sum
+    assert_equal 2, exported_span_count
+  ensure
+    processor&.shutdown(timeout: 1)
+    FileUtils.rm_f(exporter&.path)
+  end
+
   private
 
   def wait_until(timeout: 1)
