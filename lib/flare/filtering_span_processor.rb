@@ -21,6 +21,7 @@ module Flare
     DEFAULT_MAX_QUEUE = 5_000
     DEFAULT_FLUSH_INTERVAL = 5      # seconds
     DEFAULT_EXPORT_TIMEOUT = 30     # seconds
+    DEFAULT_MARKED_TRACE_GRACE_PERIOD = 1.0 # seconds
 
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
@@ -28,18 +29,21 @@ module Flare
                    max_queue: DEFAULT_MAX_QUEUE,
                    flush_interval: DEFAULT_FLUSH_INTERVAL,
                    export_timeout: DEFAULT_EXPORT_TIMEOUT,
+                   marked_trace_grace_period: DEFAULT_MARKED_TRACE_GRACE_PERIOD,
                    logger: nil)
       @exporter       = exporter
       @marker         = marker
       @max_queue      = max_queue
       @flush_interval = flush_interval
       @export_timeout = export_timeout
+      @marked_trace_grace_period = marked_trace_grace_period.to_f
       @logger         = logger || Logger.new($stderr, level: Logger::WARN)
 
       @pending_by_trace = {}
       @trace_order      = []
       @pending_count    = 0
       @ready_queue      = []
+      @delayed_ready_by_trace = {}
       @mutex            = Mutex.new
       @cond             = ConditionVariable.new
       @stopped          = false
@@ -63,13 +67,14 @@ module Flare
       marked  = ctx && @marker.marked?(ctx.trace_id)
       owner_finished = marked && @marker.owner?(ctx.trace_id, ctx.span_id)
 
-      # Owner cleanup happens regardless of whether we export.
-      @marker.unmark(ctx.trace_id) if owner_finished
-
       return unless sampled || marked
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
-      enqueue(span_data, complete: owner_finished || sampled_completion_span?(span_data))
+      enqueue(
+        span_data,
+        complete: owner_finished || sampled_completion_span?(span_data),
+        delay: owner_finished ? @marked_trace_grace_period : 0
+      )
     end
 
     def force_flush(timeout: nil)
@@ -98,7 +103,7 @@ module Flare
 
     private
 
-    def enqueue(span_data, complete:)
+    def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
@@ -107,7 +112,9 @@ module Flare
         @pending_count += 1
         evict_oldest_spans
 
-        mark_trace_ready(trace_id) if complete
+        if complete
+          delay.positive? ? delay_trace_ready(trace_id, delay) : mark_trace_ready(trace_id)
+        end
         evict_oldest_spans
         update_buffer_high_watermark
       end
@@ -116,7 +123,8 @@ module Flare
     def worker_loop
       until stopped?
         @mutex.synchronize do
-          @cond.wait(@mutex, @flush_interval) if @ready_queue.empty? && !@stopped
+          timeout = next_wait_timeout
+          @cond.wait(@mutex, timeout) if @ready_queue.empty? && !@stopped
         end
         drain_and_export
       end
@@ -129,11 +137,15 @@ module Flare
     def drain_and_export(include_pending: false)
       batch = nil
       @mutex.synchronize do
+        promote_due_delayed_traces
+
         if include_pending
           @ready_queue.concat(@pending_by_trace.values.flatten)
           @pending_by_trace.clear
           @trace_order.clear
           @pending_count = 0
+          unmark_delayed_traces
+          @delayed_ready_by_trace.clear
         end
 
         return if @ready_queue.empty?
@@ -153,9 +165,35 @@ module Flare
       return unless batch
 
       @trace_order.delete(trace_id)
+      @delayed_ready_by_trace.delete(trace_id)
       @pending_count -= batch.length
       @ready_queue.concat(batch)
       @cond.signal
+    end
+
+    def delay_trace_ready(trace_id, delay)
+      @delayed_ready_by_trace[trace_id] = monotonic_now + delay
+      @cond.signal
+    end
+
+    def promote_due_delayed_traces
+      now = monotonic_now
+      ready_trace_ids = @delayed_ready_by_trace.select { |_, ready_at| ready_at <= now }.keys
+      ready_trace_ids.each do |trace_id|
+        mark_trace_ready(trace_id)
+        @marker.unmark(trace_id)
+      end
+    end
+
+    def unmark_delayed_traces
+      @delayed_ready_by_trace.each_key { |trace_id| @marker.unmark(trace_id) }
+    end
+
+    def next_wait_timeout
+      next_ready_at = @delayed_ready_by_trace.values.min
+      return @flush_interval unless next_ready_at
+
+      [next_ready_at - monotonic_now, 0].max
     end
 
     def evict_oldest_spans
@@ -191,6 +229,10 @@ module Flare
     def update_buffer_high_watermark
       current = queued_span_count
       @buffer_high_watermark.update { |previous| current > previous ? current : previous }
+    end
+
+    def monotonic_now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
 
     def sampled_completion_span?(span_data)

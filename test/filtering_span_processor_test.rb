@@ -12,6 +12,7 @@ class FilteringSpanProcessorTest < Minitest::Test
       exporter:       @exporter,
       marker:         @marker,
       flush_interval: 0.05,
+      marked_trace_grace_period: 0.05,
       logger:         Logger.new(IO::NULL)
     )
   end
@@ -53,6 +54,17 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 2, @exporter.exports.flatten.length
   end
 
+  def test_keeps_marked_trace_open_briefly_for_late_finishing_children
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 1)
+
+    @processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote"))
+    @processor.on_finish(span(trace_id: "t1", span_id: "late-child", sampled: false, parent_span_id: "rack"))
+    wait_until { @exporter.exports.flatten.length == 2 }
+
+    assert_equal %w[rack late-child], @exporter.exports.flatten.map(&:span_id)
+    refute @marker.marked?("t1")
+  end
+
   def test_drops_spans_that_are_neither_sampled_nor_marked
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: false))
     @processor.force_flush
@@ -65,6 +77,7 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert @marker.marked?("t1")
 
     @processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false))
+    @processor.force_flush
 
     refute @marker.marked?("t1")
   end
@@ -150,6 +163,13 @@ class FilteringSpanProcessorTest < Minitest::Test
   end
 
   private
+
+  def wait_until(timeout: 1)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    until yield || Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+      sleep 0.01
+    end
+  end
 
   def span(trace_id:, span_id:, sampled:, parent_span_id: "parent", kind: :internal)
     MockSpan.new(trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id, sampled: sampled, kind: kind)

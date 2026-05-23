@@ -5,7 +5,7 @@ require "flare/trace_blob"
 require "flare/sampler"
 
 class TraceBlobTest < Minitest::Test
-  SpanData = Struct.new(:name, :span_id, :parent_span_id, :start_timestamp, :end_timestamp, :attributes, keyword_init: true)
+  SpanData = Struct.new(:name, :span_id, :parent_span_id, :start_timestamp, :end_timestamp, :attributes, :kind, keyword_init: true)
 
   def test_to_h_emits_the_expected_top_level_shape
     raw_trace = "\xaa".b * 16
@@ -70,6 +70,23 @@ class TraceBlobTest < Minitest::Test
     assert_equal 255, h["root_name"].length
   end
 
+  def test_remote_parented_entry_span_is_used_as_the_root_summary
+    remote_parent_id = "\x99".b * 8
+    spans = [
+      span("SELECT users", id: "\x02".b * 8, parent: "\x01".b * 8,
+           start_ns: 5_000_000, end_ns: 10_000_000, kind: :client),
+      span("UsersController#show", id: "\x01".b * 8, parent: remote_parent_id,
+           start_ns: 0, end_ns: 100_000_000,
+           attrs: { Flare::Sampler::RULE_ID_ATTRIBUTE => 9 },
+           kind: :server)
+    ]
+
+    h = Flare::TraceBlob.build(trace_id: ("\xaa".b * 16), spans: spans).to_h
+
+    assert_equal "UsersController#show", h["root_name"]
+    assert_equal 100, h["duration_ms"]
+  end
+
   def test_returns_nil_when_no_spans
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: [])
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: nil)
@@ -77,9 +94,9 @@ class TraceBlobTest < Minitest::Test
 
   private
 
-  def span(name, id:, parent:, start_ns:, end_ns:, attrs: nil)
+  def span(name, id:, parent:, start_ns:, end_ns:, attrs: nil, kind: :internal)
     SpanData.new(name: name, span_id: id, parent_span_id: parent,
                  start_timestamp: start_ns, end_timestamp: end_ns,
-                 attributes: attrs)
+                 attributes: attrs, kind: kind)
   end
 end

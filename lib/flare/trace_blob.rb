@@ -50,7 +50,11 @@ module Flare
     private
 
     def find_root
-      @spans.find { |s| root?(s) } || @spans.first
+      @spans.find { |s| entry_span?(s) && rule_id_attribute(s) } ||
+        @spans.find { |s| root?(s) } ||
+        @spans.find { |s| entry_span?(s) } ||
+        @spans.find { |s| rule_id_attribute(s) } ||
+        @spans.first
     end
 
     def root?(span)
@@ -58,14 +62,25 @@ module Flare
       pid.nil? || pid.empty? || pid == ZERO_SPAN_ID
     end
 
+    def entry_span?(span)
+      return false unless span.respond_to?(:kind)
+
+      span.kind == :server || span.kind == :consumer
+    end
+
     def rule_id_from_spans
       @spans.each do |s|
-        attrs = s.attributes
-        next unless attrs
-        value = attrs[Sampler::RULE_ID_ATTRIBUTE] || attrs[Sampler::RULE_ID_ATTRIBUTE.to_sym]
+        value = rule_id_attribute(s)
         return value if value
       end
       nil
+    end
+
+    def rule_id_attribute(span)
+      attrs = span.attributes
+      return nil unless attrs
+
+      attrs[Sampler::RULE_ID_ATTRIBUTE] || attrs[Sampler::RULE_ID_ATTRIBUTE.to_sym]
     end
 
     def root_name(root)
