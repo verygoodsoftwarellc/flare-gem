@@ -236,7 +236,7 @@ module Flare
     #
     # Sampler is set on the tracer_provider AFTER SDK.configure -- the SDK's
     # Configurator block doesn't expose a `sampler=`; the provider does.
-    if configuration.tracing_enabled
+    if configuration.tracing_submission_configured?
       @sampler         = Sampler.new
       @marker          = Marker.new
       @upload_url_pool = UploadUrlPool.new
