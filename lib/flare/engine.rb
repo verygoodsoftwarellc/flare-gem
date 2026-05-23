@@ -29,8 +29,8 @@ module Flare
     # so user config (metrics_enabled, tracing_enabled, flush_interval,
     # tracing_poll_interval, etc.) is applied.
     config.after_initialize do
-      Flare.start_metrics_flusher
       Flare.start_rule_manager
+      Flare.start_metrics_flusher
     end
 
     # Auto-mount routes in development/test

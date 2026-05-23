@@ -46,7 +46,86 @@ class IntegrationTest < Minitest::Test
   end
 
   def teardown
+    cleanup_tracing_bootstrap if @touched_tracing_bootstrap
     Flare.storage.clear_all
+  end
+
+  def prepare_tracing_bootstrap
+    @touched_tracing_bootstrap = true
+    @previous_tracing_config = {
+      url: Flare.configuration.url,
+      key: Flare.configuration.key,
+      tracing_enabled: Flare.configuration.tracing_enabled
+    }
+    @previous_sampler = OpenTelemetry.tracer_provider.sampler if OpenTelemetry.tracer_provider.respond_to?(:sampler)
+
+    Flare.configuration.url = "https://flare.example"
+    Flare.configuration.key = "push_123"
+    Flare.configuration.tracing_enabled = true
+  end
+
+  def cleanup_tracing_bootstrap
+    Flare.trace_span_processor&.shutdown(timeout: 1)
+    Flare.rule_manager&.stop
+    Flare.instance_variable_get(:@web_marker_subscriber)&.stop
+
+    %i[
+      @sampler
+      @marker
+      @upload_url_pool
+      @trace_exporter
+      @trace_span_processor
+      @trace_health_reporter
+      @web_marker_subscriber
+      @rule_manager
+    ].each { |ivar| Flare.remove_instance_variable(ivar) if Flare.instance_variable_defined?(ivar) }
+
+    if @previous_tracing_config
+      Flare.configuration.url = @previous_tracing_config[:url]
+      Flare.configuration.key = @previous_tracing_config[:key]
+      Flare.configuration.tracing_enabled = @previous_tracing_config[:tracing_enabled]
+    end
+    OpenTelemetry.tracer_provider.sampler = @previous_sampler if @previous_sampler && OpenTelemetry.tracer_provider.respond_to?(:sampler=)
+  end
+
+  def test_start_rule_manager_uses_finalized_configuration
+    prepare_tracing_bootstrap
+
+    rule_manager_args = nil
+    fake_manager = FakeRuleManager.new
+    Flare::RuleManager.stub :new, ->(**args) { rule_manager_args = args; fake_manager } do
+      Flare.start_rule_manager
+    end
+
+    assert Flare.sampler
+    assert Flare.marker
+    assert Flare.upload_url_pool
+    assert Flare.trace_span_processor
+    assert Flare.trace_health_reporter
+    assert_same fake_manager, Flare.rule_manager
+    assert fake_manager.started
+    assert_equal "https://flare.example", rule_manager_args[:base_url]
+    assert_equal "push_123", rule_manager_args[:api_key]
+  end
+
+  def test_tracing_sampler_records_requests_with_unsampled_remote_parent
+    prepare_tracing_bootstrap
+    Flare.setup_tracing_components
+
+    tracer = OpenTelemetry.tracer_provider.tracer("flare-test")
+    remote_context = OpenTelemetry::Trace::SpanContext.new(
+      trace_id: "\x01".b * 16,
+      span_id: "\x02".b * 8,
+      trace_flags: OpenTelemetry::Trace::TraceFlags::DEFAULT,
+      remote: true
+    )
+    parent = OpenTelemetry::Trace.context_with_span(OpenTelemetry::Trace.non_recording_span(remote_context))
+
+    span = tracer.start_span("GET /users", kind: :server, with_parent: parent)
+
+    assert span.recording?
+  ensure
+    span&.finish if span&.respond_to?(:finish)
   end
 
   def create_request_span(trace_id:, name: "GET /users", method: "GET", status: 200, controller: "UsersController", action: "index")
@@ -373,5 +452,16 @@ class IntegrationTest < Minitest::Test
 
     assert last_response.ok?
     assert_includes last_response.body, "Next"
+  end
+
+  class FakeRuleManager
+    attr_reader :started
+
+    def start
+      @started = true
+      self
+    end
+
+    def stop; end
   end
 end
