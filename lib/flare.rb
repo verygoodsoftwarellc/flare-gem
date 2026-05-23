@@ -20,6 +20,7 @@ require_relative "flare/filtering_span_processor"
 require_relative "flare/upload_url_pool"
 require_relative "flare/trace_exporter"
 require_relative "flare/rule_manager"
+require_relative "flare/trace_health_reporter"
 
 module Flare
   class Error < StandardError; end
@@ -127,6 +128,8 @@ module Flare
   def marker          = @marker
   def upload_url_pool = @upload_url_pool
   def rule_manager    = @rule_manager
+  def trace_span_processor = @trace_span_processor
+  def trace_health_reporter = @trace_health_reporter
 
   # Manually flush metrics (useful for testing or forced flushes).
   def flush_metrics
@@ -244,7 +247,7 @@ module Flare
           local_parent_not_sampled: ALWAYS_RECORD_ONLY
         )
 
-      trace_exporter = TraceExporter.new(
+      @trace_exporter = TraceExporter.new(
         pool:        @upload_url_pool,
         notify_url:  "#{configuration.url.to_s.chomp('/')}/api/traces",
         api_key:     configuration.key,
@@ -252,8 +255,17 @@ module Flare
         environment: rails_env_name
       )
 
-      OpenTelemetry.tracer_provider.add_span_processor(
-        FilteringSpanProcessor.new(exporter: trace_exporter, marker: @marker)
+      @trace_span_processor = FilteringSpanProcessor.new(
+        exporter: @trace_exporter,
+        marker: @marker,
+        max_queue: configuration.tracing_max_queue
+      )
+      OpenTelemetry.tracer_provider.add_span_processor(@trace_span_processor)
+
+      @trace_health_reporter = TraceHealthReporter.new(
+        processor: @trace_span_processor,
+        pool: @upload_url_pool,
+        exporter: @trace_exporter
       )
 
       # Path 2 trace marking. Rails-only -- in non-Rails contexts the
@@ -325,7 +337,8 @@ module Flare
       @metric_flusher = MetricFlusher.new(
         storage: @metric_storage,
         submitter: submitter,
-        interval: configuration.metrics_flush_interval
+        interval: configuration.metrics_flush_interval,
+        health_reporters: @trace_health_reporter ? [@trace_health_reporter] : []
       )
       @metric_flusher.start
       log "Metrics flusher started (interval=#{configuration.metrics_flush_interval}s)"

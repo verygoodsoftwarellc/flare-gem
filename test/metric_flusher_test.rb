@@ -67,6 +67,23 @@ class MetricFlusherTest < Minitest::Test
     assert @storage.empty?
   end
 
+  def test_flush_now_records_health_metrics_before_draining
+    reporter = MockHealthReporter.new(create_key("sdk", "flare-ruby", "tracing", "dropped_spans"))
+    flusher = Flare::MetricFlusher.new(
+      storage: @storage,
+      submitter: @submitter,
+      interval: 1,
+      health_reporters: [reporter]
+    )
+
+    count = flusher.flush_now
+
+    assert_equal 1, count
+    assert_equal 1, reporter.record_count
+    submitted = @submitter.submitted_data.last
+    assert_equal({ count: 1, sum_ms: 0, error_count: 0 }, submitted[reporter.key])
+  end
+
   def test_background_flush_occurs
     @flusher.start
 
@@ -130,6 +147,20 @@ class MetricFlusherTest < Minitest::Test
         @submit_count += 1
       end
       [drained.size, nil]
+    end
+  end
+
+  class MockHealthReporter
+    attr_reader :key, :record_count
+
+    def initialize(key)
+      @key = key
+      @record_count = 0
+    end
+
+    def record(storage)
+      @record_count += 1
+      storage.add(@key, count: 1, sum_ms: 0)
     end
   end
 end

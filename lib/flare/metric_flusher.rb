@@ -15,11 +15,12 @@ module Flare
 
     attr_reader :interval, :shutdown_timeout
 
-    def initialize(storage:, submitter:, interval: DEFAULT_INTERVAL, shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT)
+    def initialize(storage:, submitter:, interval: DEFAULT_INTERVAL, shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT, health_reporters: [])
       @storage = storage
       @submitter = submitter
       @interval = interval
       @shutdown_timeout = shutdown_timeout
+      @health_reporters = Array(health_reporters)
       @pid = $$
       @stopped = false
     end
@@ -44,7 +45,7 @@ module Flare
 
       @stopped = true
 
-      Flare.log "Shutting down metrics flusher, draining remaining metrics..."
+      log "Shutting down metrics flusher, draining remaining metrics..."
 
       if @timer
         @timer.shutdown
@@ -59,7 +60,7 @@ module Flare
         @pool.kill unless pool_terminated
       end
 
-      Flare.log "Metrics flusher stopped"
+      log "Metrics flusher stopped"
     end
 
     def restart
@@ -72,6 +73,7 @@ module Flare
     def flush_now
       return 0 unless @storage && @submitter
 
+      record_health_metrics
       drained = @storage.drain
       return 0 if drained.empty?
 
@@ -100,13 +102,14 @@ module Flare
     private
 
     def post_to_pool
+      record_health_metrics
       drained = @storage.drain
       if drained.empty?
-        Flare.log "No metrics to flush"
+        log "No metrics to flush"
         return
       end
 
-      Flare.log "Drained #{drained.size} metric keys for submission"
+      log "Drained #{drained.size} metric keys for submission"
       @pool.post { submit_to_cloud(drained) }
     rescue => e
       warn "[Flare] Metric drain error: #{e.message}"
@@ -119,6 +122,16 @@ module Flare
       end
     rescue => e
       warn "[Flare] Metric submission error: #{e.message}"
+    end
+
+    def record_health_metrics
+      @health_reporters.each { |reporter| reporter.record(@storage) }
+    rescue => e
+      warn "[Flare] Health metric recording error: #{e.message}"
+    end
+
+    def log(message)
+      Flare.log(message) if Flare.respond_to?(:log)
     end
   end
 end

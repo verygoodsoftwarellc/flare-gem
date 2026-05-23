@@ -20,6 +20,7 @@ module Flare
     attr_accessor :metrics_flush_interval # seconds between flushes (default: 60)
     attr_accessor :tracing_enabled
     attr_accessor :tracing_poll_interval  # seconds between /api/rules polls (default: 30)
+    attr_accessor :tracing_max_queue      # max traced spans buffered per process
 
     # Metrics HTTP submission settings
     attr_accessor :url        # URL of the Flare metrics service
@@ -60,6 +61,7 @@ module Flare
       @metrics_flush_interval = 60 # seconds
       @tracing_enabled = !rails_test?
       @tracing_poll_interval = 30  # seconds
+      @tracing_max_queue = 5_000
 
       # Metrics HTTP submission defaults
       @url = ENV.fetch("FLARE_URL", credentials_url || "https://flare.am")

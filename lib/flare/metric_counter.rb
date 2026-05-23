@@ -22,6 +22,12 @@ module Flare
       @error_count.increment if error
     end
 
+    def add(count:, sum_ms:, error_count: 0)
+      @count.increment(count.to_i)
+      @sum_ms.increment(sum_ms.to_i)
+      @error_count.increment(error_count.to_i)
+    end
+
     def count
       @count.value
     end

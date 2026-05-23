@@ -22,7 +22,7 @@ module Flare
     DEFAULT_FLUSH_INTERVAL = 5      # seconds
     DEFAULT_EXPORT_TIMEOUT = 30     # seconds
 
-    attr_reader :dropped_count, :failed_export_count, :exception_count
+    attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
     def initialize(exporter:, marker:,
                    max_queue: DEFAULT_MAX_QUEUE,
@@ -48,6 +48,7 @@ module Flare
       @dropped_count       = Concurrent::AtomicFixnum.new(0)
       @failed_export_count = Concurrent::AtomicFixnum.new(0)
       @exception_count     = Concurrent::AtomicFixnum.new(0)
+      @buffer_high_watermark = Concurrent::AtomicFixnum.new(0)
 
       start_worker
     end
@@ -87,6 +88,14 @@ module Flare
       SUCCESS
     end
 
+    def buffer_size
+      @mutex.synchronize { queued_span_count }
+    end
+
+    def reset_buffer_high_watermark
+      @buffer_high_watermark.value = buffer_size
+    end
+
     private
 
     def enqueue(span_data, complete:)
@@ -100,6 +109,7 @@ module Flare
 
         mark_trace_ready(trace_id) if complete
         evict_oldest_spans
+        update_buffer_high_watermark
       end
     end
 
@@ -176,6 +186,11 @@ module Flare
 
     def queued_span_count
       @pending_count + @ready_queue.length
+    end
+
+    def update_buffer_high_watermark
+      current = queued_span_count
+      @buffer_high_watermark.update { |previous| current > previous ? current : previous }
     end
 
     def sampled_completion_span?(span_data)
