@@ -284,6 +284,11 @@ module Flare
         span_processor.shutdown
         log "Span processor flushed and stopped"
       end
+      if @trace_span_processor
+        @trace_span_processor.force_flush
+        @trace_span_processor.shutdown
+        log "Trace span processor flushed and stopped"
+      end
       log "Shutdown complete"
     end
 
