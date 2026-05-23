@@ -14,4 +14,19 @@ class TestFlare < Minitest::Test
     assert_equal 24, config.retention_hours
     assert_equal 10_000, config.max_spans
   end
+
+  def test_tracing_submission_requires_tracing_endpoint_and_key
+    config = Flare::Configuration.new
+    config.tracing_enabled = true
+    config.url = "https://flare.example"
+    config.key = nil
+
+    refute config.tracing_submission_configured?
+
+    config.key = "push_123"
+    assert config.tracing_submission_configured?
+
+    config.tracing_enabled = false
+    refute config.tracing_submission_configured?
+  end
 end

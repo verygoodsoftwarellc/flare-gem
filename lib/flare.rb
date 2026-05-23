@@ -13,6 +13,15 @@ require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
 
+require_relative "flare/sampler"
+require_relative "flare/marker"
+require_relative "flare/web_marker_subscriber"
+require_relative "flare/filtering_span_processor"
+require_relative "flare/upload_url_pool"
+require_relative "flare/trace_exporter"
+require_relative "flare/rule_manager"
+require_relative "flare/trace_health_reporter"
+
 module Flare
   class Error < StandardError; end
 
@@ -114,15 +123,43 @@ module Flare
     @metric_flusher = flusher
   end
 
+  # Trace-sampling components, exposed for tests + manual after_fork wiring.
+  def sampler         = @sampler
+  def marker          = @marker
+  def upload_url_pool = @upload_url_pool
+  def rule_manager    = @rule_manager
+  def trace_span_processor = @trace_span_processor
+  def trace_health_reporter = @trace_health_reporter
+
   # Manually flush metrics (useful for testing or forced flushes).
   def flush_metrics
     @metric_flusher&.flush_now || 0
   end
 
-  # Re-initialize metric flusher after fork.
+  # Default project key, derived from the host Rails app's module name.
+  # Customers can override by configuring something else once we expose
+  # configuration.project; for v0.3 this matches MetricSubmitter's behavior.
+  def service_name_for_app
+    if defined?(Rails) && Rails.respond_to?(:application) && Rails.application
+      Rails.application.class.module_parent_name.underscore rescue "rails_app"
+    else
+      "app"
+    end
+  end
+
+  def rails_env_name
+    if defined?(Rails) && Rails.respond_to?(:env)
+      Rails.env.to_s
+    else
+      ENV.fetch("RACK_ENV", "development")
+    end
+  end
+
+  # Re-initialize background threads after fork.
   # Call this from Puma/Unicorn after_fork hooks.
   def after_fork
     @metric_flusher&.after_fork
+    @rule_manager&.after_fork
   end
 
   # Configure OpenTelemetry SDK and instrumentations. Must run before the
@@ -135,11 +172,7 @@ module Flare
     # Suppress noisy OTel INFO logs
     OpenTelemetry.logger = Logger.new(STDOUT, level: Logger::WARN)
 
-    service_name = if defined?(Rails) && Rails.application
-      Rails.application.class.module_parent_name.underscore rescue "rails_app"
-    else
-      "app"
-    end
+    service_name = service_name_for_app
 
     # Require flare's bundled instrumentations
     require "opentelemetry-instrumentation-rack"
@@ -201,10 +234,96 @@ module Flare
         span_processor.shutdown
         log "Span processor flushed and stopped"
       end
+      if @trace_span_processor
+        @trace_span_processor.force_flush
+        @trace_span_processor.shutdown
+        log "Trace span processor flushed and stopped"
+      end
       log "Shutdown complete"
     end
 
     @otel_configured = true
+  end
+
+  # Start the trace-rules poller. Polls GET /api/rules every
+  # tracing_poll_interval (default 30s) so the in-process sampler + URL
+  # pool stay current. Called from config.after_initialize -- after the
+  # user's configure block has run -- so configuration.url / .key /
+  # .tracing_enabled are settled.
+  def start_rule_manager
+    return unless configuration.tracing_submission_configured?
+
+    setup_tracing_components
+    return unless @sampler && @marker && @upload_url_pool
+
+    @rule_manager = RuleManager.new(
+      sampler:     @sampler,
+      marker:      @marker,
+      pool:        @upload_url_pool,
+      base_url:    configuration.url,
+      api_key:     configuration.key,
+      project:     service_name_for_app,
+      environment: rails_env_name,
+      interval:    configuration.tracing_poll_interval
+    )
+    @rule_manager.start
+    log "Rule manager started (poll=#{configuration.tracing_poll_interval}s)"
+
+    at_exit { @rule_manager&.stop }
+  end
+
+  def setup_tracing_components
+    return if @trace_span_processor
+
+    @sampler         = Sampler.new
+    @marker          = Marker.new
+    @upload_url_pool = UploadUrlPool.new
+
+    # Trace sampling: server-controlled per-route capture. The sampler runs
+    # at span start; for routes it can't decide there (Rails web spans get
+    # their controller#action attributes set post-routing) the marker +
+    # WebMarkerSubscriber handle it. The RECORD_ONLY delegates keep children
+    # of unsampled local and remote parents recording so processors still see
+    # web requests that arrive with an unsampled traceparent header.
+    #
+    # Sampler is set on the tracer_provider AFTER SDK.configure -- the SDK's
+    # Configurator block doesn't expose a `sampler=`; the provider does.
+    OpenTelemetry.tracer_provider.sampler =
+      OpenTelemetry::SDK::Trace::Samplers.parent_based(
+        root: @sampler,
+        remote_parent_sampled: ALWAYS_RECORD_ONLY,
+        remote_parent_not_sampled: ALWAYS_RECORD_ONLY,
+        local_parent_not_sampled: ALWAYS_RECORD_ONLY
+      )
+
+    @trace_exporter = TraceExporter.new(
+      pool:        @upload_url_pool,
+      notify_url:  "#{configuration.url.to_s.chomp('/')}/api/traces",
+      api_key:     configuration.key,
+      project:     service_name_for_app,
+      environment: rails_env_name
+    )
+
+    @trace_span_processor = FilteringSpanProcessor.new(
+      exporter: @trace_exporter,
+      marker: @marker,
+      max_queue: configuration.tracing_max_queue
+    )
+    OpenTelemetry.tracer_provider.add_span_processor(@trace_span_processor)
+
+    @trace_health_reporter = TraceHealthReporter.new(
+      processor: @trace_span_processor,
+      pool: @upload_url_pool,
+      exporter: @trace_exporter
+    )
+
+    # Path 2 trace marking. Rails-only -- in non-Rails contexts the
+    # subscriber would never fire but creating it is harmless.
+    if defined?(ActiveSupport::Notifications)
+      @web_marker_subscriber = WebMarkerSubscriber.new(sampler: @sampler, marker: @marker).start
+    end
+
+    log "Tracing enabled (poll=#{configuration.tracing_poll_interval}s)"
   end
 
   # Start the metrics flusher. Called from config.after_initialize so
@@ -229,7 +348,8 @@ module Flare
       @metric_flusher = MetricFlusher.new(
         storage: @metric_storage,
         submitter: submitter,
-        interval: configuration.metrics_flush_interval
+        interval: configuration.metrics_flush_interval,
+        health_reporters: @trace_health_reporter ? [@trace_health_reporter] : []
       )
       @metric_flusher.start
       log "Metrics flusher started (interval=#{configuration.metrics_flush_interval}s)"

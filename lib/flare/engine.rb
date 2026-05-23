@@ -25,9 +25,11 @@ module Flare
       Flare.configure_opentelemetry
     end
 
-    # Phase 2: Start the metrics flusher after all initializers have run
-    # so user config (metrics_enabled, flush_interval, etc.) is applied.
+    # Phase 2: Start background threads after all initializers have run
+    # so user config (metrics_enabled, tracing_enabled, flush_interval,
+    # tracing_poll_interval, etc.) is applied.
     config.after_initialize do
+      Flare.start_rule_manager
       Flare.start_metrics_flusher
     end
 

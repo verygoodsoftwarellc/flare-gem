@@ -16,6 +16,11 @@ module Flare
       counter.increment(duration_ms: duration_ms, error: error)
     end
 
+    def add(key, count:, sum_ms:, error_count: 0)
+      counter = @storage.compute_if_absent(key) { MetricCounter.new }
+      counter.add(count: count, sum_ms: sum_ms, error_count: error_count)
+    end
+
     # Atomically retrieves and clears all metrics.
     # Returns a frozen hash of MetricKey => counter data.
     def drain

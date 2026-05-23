@@ -34,6 +34,18 @@ class MetricStorageTest < Minitest::Test
     assert_equal 1, @storage[key].error_count
   end
 
+  def test_add_accumulates_raw_counter_values
+    key = create_key("sdk", "flare-ruby", "tracing", "dropped_spans")
+
+    @storage.add(key, count: 5, sum_ms: 0)
+    @storage.add(key, count: 2, sum_ms: 10, error_count: 1)
+
+    assert_equal 1, @storage.size
+    assert_equal 7, @storage[key].count
+    assert_equal 10, @storage[key].sum_ms
+    assert_equal 1, @storage[key].error_count
+  end
+
   def test_increment_different_keys
     key1 = create_key("web", "rails", "UsersController", "show")
     key2 = create_key("web", "rails", "UsersController", "index")

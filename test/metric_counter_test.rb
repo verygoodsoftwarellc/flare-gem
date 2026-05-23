@@ -41,6 +41,16 @@ class MetricCounterTest < Minitest::Test
     assert_equal 1, counter.error_count
   end
 
+  def test_add_accumulates_raw_values
+    counter = Flare::MetricCounter.new
+
+    counter.add(count: 5, sum_ms: 20, error_count: 2)
+
+    assert_equal 5, counter.count
+    assert_equal 20, counter.sum_ms
+    assert_equal 2, counter.error_count
+  end
+
   def test_to_h
     counter = Flare::MetricCounter.new
     counter.increment(duration_ms: 100, error: false)
