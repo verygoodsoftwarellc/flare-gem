@@ -5,7 +5,8 @@ require "json"
 require "zlib"
 require "stringio"
 require "securerandom"
-require "socket"
+
+require_relative "client_headers"
 
 module Flare
   # Submits metrics to the Flare metrics service via HTTP.
@@ -13,7 +14,6 @@ module Flare
   class MetricSubmitter
     SCHEMA_VERSION = "V1"
     GZIP_ENCODING = "gzip"
-    USER_AGENT = "Flare Ruby/#{Flare::VERSION}"
 
     # Default timeouts (in seconds)
     DEFAULT_OPEN_TIMEOUT = 2
@@ -123,16 +123,11 @@ module Flare
       request["Content-Type"] = "application/json"
       request["Content-Encoding"] = GZIP_ENCODING
       request["Authorization"] = "Bearer #{@api_key}"
-      request["User-Agent"] = USER_AGENT
       request["X-Request-Id"] = request_id
       request["X-Schema-Version"] = SCHEMA_VERSION
 
-      # Client metadata headers (like Flipper)
-      request["X-Client-Language"] = "ruby"
-      request["X-Client-Language-Version"] = RUBY_VERSION
-      request["X-Client-Platform"] = RUBY_PLATFORM
-      request["X-Client-Pid"] = Process.pid.to_s
-      request["X-Client-Hostname"] = Socket.gethostname rescue "unknown"
+      # Client + version identifying headers, shared across every Flare-API request.
+      ClientHeaders.to_h.each { |name, value| request[name] = value }
 
       request.body = body
       response = http.request(request)

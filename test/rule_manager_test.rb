@@ -62,6 +62,19 @@ class RuleManagerTest < Minitest::Test
     assert_equal '"e1"', second[:headers]["If-None-Match"]
   end
 
+  def test_poll_sends_client_identifying_headers
+    @transport.queue(ok({ "trace_rules" => [] }))
+    @manager.poll_now
+
+    headers = @transport.calls.last[:headers]
+    assert_equal "Flare Ruby/#{Flare::VERSION}", headers["User-Agent"]
+    assert_match %r{\AFlare Ruby/(\S+)}, headers["User-Agent"]
+    assert_equal "ruby", headers["X-Client-Language"]
+    # Authorization / Flare-* still present alongside the client headers.
+    assert_equal "Bearer push_abc", headers["Authorization"]
+    assert_equal "demo-app", headers["Flare-Project"]
+  end
+
   def test_304_does_not_change_sampler_or_pool
     @transport.queue(
       ok({

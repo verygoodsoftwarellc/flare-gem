@@ -8,6 +8,7 @@ require "uri"
 require "concurrent/atomic/atomic_fixnum"
 require "opentelemetry/sdk"
 
+require_relative "client_headers"
 require_relative "sampler"
 require_relative "trace_blob"
 require_relative "http_transport"
@@ -117,13 +118,16 @@ module Flare
       @logger.warn("[Flare::TraceExporter] notify exception: #{e.class}: #{e.message}")
     end
 
+    # Identifies the client on the Flare-API notify POST. The presigned R2
+    # PUT in #ship deliberately uses PUT_HEADERS only -- adding these there
+    # could invalidate the signed-header set.
     def notify_headers
-      {
+      ClientHeaders.to_h.merge(
         "Content-Type"      => "application/json",
         "Authorization"     => "Bearer #{@api_key}",
         "Flare-Project"     => @project,
         "Flare-Environment" => @environment
-      }
+      )
     end
 
     def record_put_failure(response)
