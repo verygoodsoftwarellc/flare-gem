@@ -49,6 +49,25 @@ class TraceExporterTest < Minitest::Test
     assert_equal "production",     post_call[:headers]["Flare-Environment"]
   end
 
+  def test_notify_sends_client_headers_but_r2_put_does_not
+    @pool.replace([upload("u1")])
+    @transport.responses_for(:put)  << http(200)
+    @transport.responses_for(:post) << http(202)
+
+    @exporter.export([span("a", trace: "t1")])
+
+    post_headers = @transport.calls(:post).first[:headers]
+    assert_equal "Flare Ruby/#{Flare::VERSION}", post_headers["User-Agent"]
+    assert_match %r{\AFlare Ruby/(\S+)}, post_headers["User-Agent"]
+    assert_equal "ruby", post_headers["X-Client-Language"]
+
+    # The presigned R2 PUT must NOT carry identifying headers (signed-header set).
+    put_headers = @transport.calls(:put).first[:headers]
+    assert_nil put_headers["User-Agent"]
+    assert_nil put_headers["X-Client-Language"]
+    assert_nil put_headers["X-Client-Hostname"]
+  end
+
   def test_groups_spans_by_trace_and_ships_each
     @pool.replace([upload("u1"), upload("u2")])
     2.times { @transport.responses_for(:put)  << http(200) }

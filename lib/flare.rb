@@ -5,6 +5,7 @@ require_relative "flare/configuration"
 
 require "opentelemetry/sdk"
 
+require_relative "flare/client_headers"
 require_relative "flare/source_location"
 require_relative "flare/metric_key"
 require_relative "flare/metric_storage"

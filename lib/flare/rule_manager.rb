@@ -5,6 +5,7 @@ require "logger"
 require "concurrent/timer_task"
 require "concurrent/atomic/atomic_fixnum"
 
+require_relative "client_headers"
 require_relative "http_transport"
 
 module Flare
@@ -118,11 +119,11 @@ module Flare
     end
 
     def request_headers
-      headers = {
+      headers = ClientHeaders.to_h.merge(
         "Authorization"     => "Bearer #{@api_key}",
         "Flare-Project"     => @project,
         "Flare-Environment" => @environment
-      }
+      )
       headers["If-None-Match"] = @etag if @etag
       headers
     end
