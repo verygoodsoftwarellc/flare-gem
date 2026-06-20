@@ -96,4 +96,43 @@ class SloManagerTest < Minitest::Test
     assert_equal({}, @manager.defaults)
     assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
   end
+
+  def test_update_from_section_maps_keys
+    @manager.update_from_section(
+      "defaults" => { "web" => 1000 },
+      "operations" => [{ "namespace" => "web", "service" => "rails", "target" => "X#y", "threshold_ms" => 250 }]
+    )
+
+    assert_equal 250, @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
+    assert_equal 1000, @manager.threshold_for(namespace: "web", service: "rails", target: "Z#a")
+  end
+
+  def test_update_from_section_clears_on_nil
+    @manager.update(defaults: { "web" => 1000 })
+    @manager.update_from_section(nil)
+
+    assert_equal({}, @manager.defaults)
+  end
+
+  def test_slow_when_over_threshold_and_not_errored
+    @manager.update(defaults: { "web" => 100 })
+
+    assert @manager.slow?(namespace: "web", service: "rails", target: "X#y", duration_ms: 150, error: false)
+  end
+
+  def test_not_slow_when_under_threshold
+    @manager.update(defaults: { "web" => 100 })
+
+    refute @manager.slow?(namespace: "web", service: "rails", target: "X#y", duration_ms: 50, error: false)
+  end
+
+  def test_not_slow_when_errored_even_if_over_threshold
+    @manager.update(defaults: { "web" => 100 })
+
+    refute @manager.slow?(namespace: "web", service: "rails", target: "X#y", duration_ms: 150, error: true)
+  end
+
+  def test_not_slow_when_untracked
+    refute @manager.slow?(namespace: "web", service: "rails", target: "X#y", duration_ms: 5000, error: false)
+  end
 end

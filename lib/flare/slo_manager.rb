@@ -39,6 +39,18 @@ module Flare
       ).freeze)
     end
 
+    # Apply the `slo` section of a server payload -- the
+    # { "defaults" => {...}, "operations" => [...] } shape delivered by both
+    # GET /api/rules and the POST /api/metrics response. Centralizes the wire
+    # shape so callers don't each know which keys map to update's args; a
+    # nil/non-hash section clears the config. Callers that treat an absent
+    # section as a no-op (e.g. the opportunistic metrics channel) guard before
+    # calling rather than passing nil.
+    def update_from_section(slo)
+      slo = {} unless slo.is_a?(Hash)
+      update(defaults: slo["defaults"], operations: slo["operations"])
+    end
+
     # Returns the threshold in integer milliseconds for this operation, or nil
     # when the operation is untracked (no override and no namespace default).
     def threshold_for(namespace:, service:, target:)
@@ -47,6 +59,16 @@ module Flare
       return override if override
 
       config.defaults[namespace]
+    end
+
+    # Latency SLI predicate: true when the operation exceeded its SLO threshold
+    # and did not error. Kept disjoint from errors so error_count + slow_count
+    # never double-counts. Untracked operations (no threshold) are never slow.
+    def slow?(namespace:, service:, target:, duration_ms:, error:)
+      return false if error
+
+      threshold = threshold_for(namespace: namespace, service: service, target: target)
+      !threshold.nil? && duration_ms > threshold
     end
 
     def defaults

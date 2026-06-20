@@ -154,6 +154,13 @@ module Flare
       )
     end
 
+    # Latency SLI: delegate the "too slow" decision to the SloManager, which owns
+    # the threshold config and the disjoint-from-errors rule. Nil manager (SLOs
+    # not wired) -> never slow.
+    def slow?(namespace:, service:, target:, duration_ms:, error:)
+      !!@slo_manager&.slow?(namespace: namespace, service: service, target: target, duration_ms: duration_ms, error: error)
+    end
+
     def record_background_metric(span)
       transaction_name = span.attributes[Flare::TRANSACTION_NAME_ATTRIBUTE]
 
@@ -286,16 +293,6 @@ module Flare
 
     def span_error?(span)
       span.status&.code == OpenTelemetry::Trace::Status::ERROR
-    end
-
-    # Latency SLI: an operation is "slow" when it exceeds its SLO threshold and
-    # did not error. Kept disjoint from errors so error_count + slow_count never
-    # double-counts. Untracked (no threshold configured) -> never slow.
-    def slow?(namespace:, service:, target:, duration_ms:, error:)
-      return false if error || @slo_manager.nil?
-
-      threshold = @slo_manager.threshold_for(namespace: namespace, service: service, target: target)
-      !threshold.nil? && duration_ms > threshold
     end
 
     def extract_job_system(span)

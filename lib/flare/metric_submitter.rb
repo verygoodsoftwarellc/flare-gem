@@ -90,6 +90,8 @@ module Flare
     # over the metrics channel too -- the path that works when tracing (and
     # thus the RuleManager poll) is disabled. Best-effort: a missing/unparsable
     # body or absent slo_manager is a no-op, never failing the submission.
+    # Unlike the rules poll, this channel is opportunistic: an absent `slo`
+    # section leaves existing config untouched rather than clearing it.
     def apply_slo(response, request_id)
       return unless @slo_manager
 
@@ -97,12 +99,10 @@ module Flare
       return if body.nil? || body.empty?
 
       payload = JSON.parse(body)
-      return unless payload.is_a?(Hash)
-
-      slo = payload["slo"]
+      slo = payload["slo"] if payload.is_a?(Hash)
       return unless slo.is_a?(Hash)
 
-      @slo_manager.update(defaults: slo["defaults"], operations: slo["operations"])
+      @slo_manager.update_from_section(slo)
     rescue => e
       Flare.log "Failed to apply slo from metrics response: #{e.message} (request_id=#{request_id})"
     end
