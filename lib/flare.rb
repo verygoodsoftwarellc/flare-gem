@@ -137,6 +137,7 @@ module Flare
   def slo_manager
     @slo_manager ||= SloManager.new
   end
+
   def trace_span_processor = @trace_span_processor
   def trace_health_reporter = @trace_health_reporter
 

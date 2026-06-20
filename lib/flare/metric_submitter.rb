@@ -85,13 +85,11 @@ module Flare
 
     private
 
-    # The /api/metrics response may carry the same `slo` section as /api/rules
-    # ({ defaults:, operations: }). Apply it so SLO config reaches the client
-    # over the metrics channel too -- the path that works when tracing (and
-    # thus the RuleManager poll) is disabled. Best-effort: a missing/unparsable
-    # body or absent slo_manager is a no-op, never failing the submission.
-    # Unlike the rules poll, this channel is opportunistic: an absent `slo`
-    # section leaves existing config untouched rather than clearing it.
+    # Applies the `slo` section the /api/metrics response may carry, so SLO
+    # config reaches the client even when tracing (and thus the RuleManager
+    # poll) is disabled. Opportunistic: an absent section is a no-op -- it
+    # leaves existing config untouched, unlike the authoritative rules poll
+    # which clears. Best-effort; never fails the submission.
     def apply_slo(response, request_id)
       return unless @slo_manager
 
