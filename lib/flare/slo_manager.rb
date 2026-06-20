@@ -3,62 +3,67 @@
 require "concurrent/atomic/atomic_reference"
 
 module Flare
-  # Holds the latency SLO thresholds delivered by the server in the `slo`
-  # section of GET /api/rules. MetricSpanProcessor asks threshold_for at every
+  # Holds the latency SLO thresholds delivered by the server in the `slo_rules`
+  # array of GET /api/rules. MetricSpanProcessor asks threshold_for at every
   # web/job span end to decide whether the operation was "too slow" -- the
   # latency SLI counterpart to error_count.
   #
-  # Two layers, mirroring the server config:
-  #   - defaults: per-namespace fallback, e.g. { "web" => 1000, "job" => 60000 }.
-  #     A namespace may be absent (its default was cleared = stop tracking it).
-  #   - operations: per-operation overrides keyed by [namespace, service, target].
+  # The wire shape is a flat array of rules, each { namespace, service?, target?,
+  # threshold_ms }:
+  #   - a namespace-only rule sets that namespace's default (e.g. web => 1000);
+  #   - a rule that also carries service + target is a per-operation override.
+  # Internally these split into a defaults hash (keyed by namespace) and an
+  # overrides hash (keyed by [namespace, service, target]).
   #
-  # Precedence in threshold_for: per-op override -> namespace default -> nil.
+  # Precedence in threshold_for: exact override -> namespace default -> nil.
   # nil means "untracked" -- the processor records no slow_count for it.
   #
   # The whole config is swapped atomically (like Sampler#update_rules) so a
-  # mid-poll read always sees a consistent defaults+operations pair. Malformed
-  # entries from a bad server payload are dropped rather than raising.
+  # mid-poll read always sees a consistent defaults+overrides pair. Malformed
+  # rules from a bad server payload are dropped rather than raising.
   class SloManager
-    Config = Struct.new(:defaults, :operations, keyword_init: true)
+    Config = Struct.new(:defaults, :overrides, keyword_init: true)
 
-    EMPTY = Config.new(defaults: {}.freeze, operations: {}.freeze).freeze
+    EMPTY = Config.new(defaults: {}.freeze, overrides: {}.freeze).freeze
 
     def initialize
       @config_ref = Concurrent::AtomicReference.new(EMPTY)
     end
 
-    # defaults:   hash like { "web" => 1000, "job" => 60000 } (string or symbol
-    #             keys accepted; nil/blank values dropped).
-    # operations: array of { "namespace", "service", "target", "threshold_ms" }
-    #             hashes; entries missing a field or threshold are skipped.
-    def update(defaults: nil, operations: nil)
-      @config_ref.set(Config.new(
-        defaults: normalize_defaults(defaults),
-        operations: normalize_operations(operations)
-      ).freeze)
-    end
+    # slo_rules: flat array of { "namespace", "service"?, "target"?,
+    # "threshold_ms" } hashes (string or symbol keys accepted). A namespace-only
+    # rule is that namespace's default; namespace + service + target is an
+    # override. Rules missing namespace/threshold, or with only one of
+    # service/target, are skipped. An absent/empty array clears the config.
+    def update(slo_rules)
+      defaults = {}
+      overrides = {}
 
-    # Apply the `slo` section of a server payload -- the
-    # { "defaults" => {...}, "operations" => [...] } shape delivered by both
-    # GET /api/rules and the POST /api/metrics response. Centralizes the wire
-    # shape so callers don't each know which keys map to update's args; a
-    # nil/non-hash section clears the config. Callers that treat an absent
-    # section as a no-op (e.g. the opportunistic metrics channel) guard before
-    # calling rather than passing nil.
-    def update_from_section(slo)
-      slo = {} unless slo.is_a?(Hash)
-      update(defaults: slo["defaults"], operations: slo["operations"])
+      Array(slo_rules).each do |rule|
+        next unless rule.is_a?(Hash)
+
+        namespace = stringify(rule["namespace"] || rule[:namespace])
+        service   = stringify(rule["service"]   || rule[:service])
+        target    = stringify(rule["target"]    || rule[:target])
+        threshold = coerce_threshold(rule["threshold_ms"] || rule[:threshold_ms])
+
+        next if namespace.nil? || threshold.nil?
+
+        if service && target
+          overrides[[namespace, service, target]] = threshold
+        elsif service.nil? && target.nil?
+          defaults[namespace] = threshold
+        end
+      end
+
+      @config_ref.set(Config.new(defaults: defaults.freeze, overrides: overrides.freeze).freeze)
     end
 
     # Returns the threshold in integer milliseconds for this operation, or nil
     # when the operation is untracked (no override and no namespace default).
     def threshold_for(namespace:, service:, target:)
       config = @config_ref.get
-      override = config.operations[[namespace, service, target]]
-      return override if override
-
-      config.defaults[namespace]
+      config.overrides[[namespace, service, target]] || config.defaults[namespace]
     end
 
     # Latency SLI predicate: true when the operation exceeded its SLO threshold
@@ -75,40 +80,17 @@ module Flare
       @config_ref.get.defaults
     end
 
-    def operations
-      @config_ref.get.operations
+    def overrides
+      @config_ref.get.overrides
     end
 
     private
 
-    def normalize_defaults(defaults)
-      return {}.freeze unless defaults.is_a?(Hash)
+    def stringify(value)
+      return nil if value.nil?
 
-      result = {}
-      defaults.each do |namespace, threshold|
-        ms = coerce_threshold(threshold)
-        result[namespace.to_s] = ms if ms
-      end
-      result.freeze
-    end
-
-    def normalize_operations(operations)
-      return {}.freeze unless operations.is_a?(Array)
-
-      result = {}
-      operations.each do |op|
-        next unless op.is_a?(Hash)
-
-        namespace = op["namespace"] || op[:namespace]
-        service   = op["service"]   || op[:service]
-        target    = op["target"]    || op[:target]
-        threshold = coerce_threshold(op["threshold_ms"] || op[:threshold_ms])
-
-        next if namespace.nil? || service.nil? || target.nil? || threshold.nil?
-
-        result[[namespace.to_s, service.to_s, target.to_s]] = threshold
-      end
-      result.freeze
+      str = value.to_s
+      str.empty? ? nil : str
     end
 
     def coerce_threshold(value)

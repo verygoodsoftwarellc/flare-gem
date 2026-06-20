@@ -28,17 +28,16 @@ class RuleManagerTest < Minitest::Test
     )
   end
 
-  def test_200_applies_slo_section
+  def test_200_applies_slo_rules
     @transport.queue(
       ok({
         "trace_rules" => [],
-        "slo" => {
-          "defaults" => { "web" => 1000, "job" => 60000 },
-          "operations" => [
-            { "namespace" => "web", "service" => "rails",
-              "target" => "FeedsController#serve_feed", "threshold_ms" => 250 }
-          ]
-        }
+        "slo_rules" => [
+          { "namespace" => "web", "threshold_ms" => 1000 },
+          { "namespace" => "job", "threshold_ms" => 60000 },
+          { "namespace" => "web", "service" => "rails",
+            "target" => "FeedsController#serve_feed", "threshold_ms" => 250 }
+        ]
       }, etag: '"slo1"')
     )
 
@@ -48,8 +47,8 @@ class RuleManagerTest < Minitest::Test
     assert_equal 250, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "FeedsController#serve_feed")
   end
 
-  def test_200_without_slo_section_clears_slo_config
-    @slo_manager.update(defaults: { "web" => 1000 })
+  def test_200_without_slo_rules_clears_slo_config
+    @slo_manager.update([{ "namespace" => "web", "threshold_ms" => 1000 }])
 
     @transport.queue(ok({ "trace_rules" => [] }))
     @manager.poll_now
@@ -59,7 +58,7 @@ class RuleManagerTest < Minitest::Test
 
   def test_slo_delivered_even_with_no_trace_rules
     @transport.queue(
-      ok({ "trace_rules" => [], "slo" => { "defaults" => { "web" => 800 } } })
+      ok({ "trace_rules" => [], "slo_rules" => [{ "namespace" => "web", "threshold_ms" => 800 }] })
     )
 
     @manager.poll_now

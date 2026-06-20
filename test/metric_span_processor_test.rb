@@ -1069,7 +1069,7 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_web_over_threshold_counts_slow
     slo = Flare::SloManager.new
-    slo.update(defaults: { "web" => 100 })
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
 
     processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100
@@ -1081,7 +1081,7 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_web_under_threshold_not_slow
     slo = Flare::SloManager.new
-    slo.update(defaults: { "web" => 100 })
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
 
     processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 50_000_000)) # 50ms < 100
@@ -1092,7 +1092,7 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_web_errored_and_slow_counts_error_only
     slo = Flare::SloManager.new
-    slo.update(defaults: { "web" => 100 })
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
 
     # 500 (error) AND over threshold -> disjoint: error only, not slow.
@@ -1124,10 +1124,10 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_web_per_op_override_applies
     slo = Flare::SloManager.new
-    slo.update(
-      defaults: { "web" => 1000 },
-      operations: [{ "namespace" => "web", "service" => "rails", "target" => "UsersController#show", "threshold_ms" => 100 }]
-    )
+    slo.update([
+      { "namespace" => "web", "threshold_ms" => 1000 },
+      { "namespace" => "web", "service" => "rails", "target" => "UsersController#show", "threshold_ms" => 100 }
+    ])
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
 
     processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100 override
@@ -1138,7 +1138,7 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_background_over_threshold_counts_slow
     slo = Flare::SloManager.new
-    slo.update(defaults: { "job" => 100 })
+    slo.update([{ "namespace" => "job", "threshold_ms" => 100 }])
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
 
     span = MockSpan.new(

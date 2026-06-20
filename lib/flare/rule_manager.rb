@@ -131,10 +131,9 @@ module Flare
 
     # Server payload shape (see tirana-v2 Api::RulesController):
     #   { "trace_rules": [{ "id", "match_attributes", "rate", ..., "urls": [...] }],
-    #     "slo": { "defaults": { "web": 1000, "job": 60000 },
-    #              "operations": [{ "namespace", "service", "target", "threshold_ms" }] } }
-    # The `slo` key is optional; the rules poll is authoritative, so an absent
-    # section clears any prior SLO config (update_from_section treats nil as empty).
+    #     "slo_rules": [{ "namespace", "service"?, "target"?, "threshold_ms" }] }
+    # The `slo_rules` key is optional; the rules poll is authoritative, so an
+    # absent array clears any prior SLO config (update treats nil as empty).
     def apply(payload)
       rules = payload["trace_rules"] || []
       @sampler.update_rules(rules)
@@ -142,7 +141,7 @@ module Flare
       url_entries = rules.flat_map { |r| Array(r["urls"]) }
       @pool.replace(url_entries)
 
-      @slo_manager&.update_from_section(payload["slo"])
+      @slo_manager&.update(payload["slo_rules"])
     end
   end
 end
