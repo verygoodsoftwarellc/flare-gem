@@ -72,7 +72,11 @@ module Flare
     def slow?(namespace:, service:, target:, duration_ms:, error:)
       return false if error
 
-      threshold = threshold_for(namespace: namespace, service: service, target: target)
+      # Common case: no SLOs configured. Bail before allocating the lookup key.
+      config = @config_ref.get
+      return false if config.overrides.empty? && config.defaults.empty?
+
+      threshold = config.overrides[[namespace, service, target]] || config.defaults[namespace]
       !threshold.nil? && duration_ms > threshold
     end
 

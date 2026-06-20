@@ -150,15 +150,8 @@ module Flare
         key,
         duration_ms: duration,
         error: error,
-        slow: slow?(namespace: "web", service: service, target: target, duration_ms: duration, error: error)
+        slow: @slo_manager&.slow?(namespace: "web", service: service, target: target, duration_ms: duration, error: error)
       )
-    end
-
-    # Latency SLI: delegate the "too slow" decision to the SloManager, which owns
-    # the threshold config and the disjoint-from-errors rule. Nil manager (SLOs
-    # not wired) -> never slow.
-    def slow?(namespace:, service:, target:, duration_ms:, error:)
-      !!@slo_manager&.slow?(namespace: namespace, service: service, target: target, duration_ms: duration_ms, error: error)
     end
 
     def record_background_metric(span)
@@ -180,7 +173,7 @@ module Flare
         key,
         duration_ms: duration,
         error: error,
-        slow: slow?(namespace: "job", service: service, target: target, duration_ms: duration, error: error)
+        slow: @slo_manager&.slow?(namespace: "job", service: service, target: target, duration_ms: duration, error: error)
       )
     end
 
