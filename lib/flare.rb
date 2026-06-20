@@ -355,8 +355,7 @@ module Flare
     if configuration.metrics_submission_configured?
       submitter = MetricSubmitter.new(
         endpoint: configuration.url,
-        api_key: configuration.key,
-        slo_manager: slo_manager
+        api_key: configuration.key
       )
       @metric_flusher = MetricFlusher.new(
         storage: @metric_storage,

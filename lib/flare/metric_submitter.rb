@@ -47,12 +47,11 @@ module Flare
 
     attr_reader :endpoint, :api_key, :backoff_policy
 
-    def initialize(endpoint:, api_key:, project: nil, environment: nil, slo_manager: nil, backoff_policy: nil, open_timeout: nil, read_timeout: nil, write_timeout: nil)
+    def initialize(endpoint:, api_key:, project: nil, environment: nil, backoff_policy: nil, open_timeout: nil, read_timeout: nil, write_timeout: nil)
       @endpoint = URI("#{endpoint.to_s.chomp('/')}/api/metrics")
       @api_key = api_key
       @project = project || default_project
       @environment = environment || default_environment
-      @slo_manager = slo_manager
       @backoff_policy = backoff_policy || BackoffPolicy.new
       @open_timeout = open_timeout || DEFAULT_OPEN_TIMEOUT
       @read_timeout = read_timeout || DEFAULT_READ_TIMEOUT
@@ -78,32 +77,11 @@ module Flare
         [0, error]
       else
         Flare.log "Submission succeeded: #{response.code} (request_id=#{request_id})"
-        apply_slo(response, request_id)
         [drained.size, nil]
       end
     end
 
     private
-
-    # Applies the `slo` section the /api/metrics response may carry, so SLO
-    # config reaches the client even when tracing (and thus the RuleManager
-    # poll) is disabled. Opportunistic: an absent section is a no-op -- it
-    # leaves existing config untouched, unlike the authoritative rules poll
-    # which clears. Best-effort; never fails the submission.
-    def apply_slo(response, request_id)
-      return unless @slo_manager
-
-      body = response.body
-      return if body.nil? || body.empty?
-
-      payload = JSON.parse(body)
-      slo = payload["slo"] if payload.is_a?(Hash)
-      return unless slo.is_a?(Hash)
-
-      @slo_manager.update_from_section(slo)
-    rescue => e
-      Flare.log "Failed to apply slo from metrics response: #{e.message} (request_id=#{request_id})"
-    end
 
     def build_body(drained, request_id)
       metrics = drained.map do |key, values|
