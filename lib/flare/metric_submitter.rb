@@ -47,11 +47,12 @@ module Flare
 
     attr_reader :endpoint, :api_key, :backoff_policy
 
-    def initialize(endpoint:, api_key:, project: nil, environment: nil, backoff_policy: nil, open_timeout: nil, read_timeout: nil, write_timeout: nil)
+    def initialize(endpoint:, api_key:, project: nil, environment: nil, slo_manager: nil, backoff_policy: nil, open_timeout: nil, read_timeout: nil, write_timeout: nil)
       @endpoint = URI("#{endpoint.to_s.chomp('/')}/api/metrics")
       @api_key = api_key
       @project = project || default_project
       @environment = environment || default_environment
+      @slo_manager = slo_manager
       @backoff_policy = backoff_policy || BackoffPolicy.new
       @open_timeout = open_timeout || DEFAULT_OPEN_TIMEOUT
       @read_timeout = read_timeout || DEFAULT_READ_TIMEOUT
@@ -77,11 +78,34 @@ module Flare
         [0, error]
       else
         Flare.log "Submission succeeded: #{response.code} (request_id=#{request_id})"
+        apply_slo(response, request_id)
         [drained.size, nil]
       end
     end
 
     private
+
+    # The /api/metrics response may carry the same `slo` section as /api/rules
+    # ({ defaults:, operations: }). Apply it so SLO config reaches the client
+    # over the metrics channel too -- the path that works when tracing (and
+    # thus the RuleManager poll) is disabled. Best-effort: a missing/unparsable
+    # body or absent slo_manager is a no-op, never failing the submission.
+    def apply_slo(response, request_id)
+      return unless @slo_manager
+
+      body = response.body
+      return if body.nil? || body.empty?
+
+      payload = JSON.parse(body)
+      return unless payload.is_a?(Hash)
+
+      slo = payload["slo"]
+      return unless slo.is_a?(Hash)
+
+      @slo_manager.update(defaults: slo["defaults"], operations: slo["operations"])
+    rescue => e
+      Flare.log "Failed to apply slo from metrics response: #{e.message} (request_id=#{request_id})"
+    end
 
     def build_body(drained, request_id)
       metrics = drained.map do |key, values|
@@ -93,7 +117,8 @@ module Flare
           operation: key.operation,
           count: values[:count],
           sum_ms: values[:sum_ms],
-          error_count: values[:error_count]
+          error_count: values[:error_count],
+          slow_count: values[:slow_count]
         }
       end
 

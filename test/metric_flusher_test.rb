@@ -81,7 +81,7 @@ class MetricFlusherTest < Minitest::Test
     assert_equal 1, count
     assert_equal 1, reporter.record_count
     submitted = @submitter.submitted_data.last
-    assert_equal({ count: 1, sum_ms: 0, error_count: 0 }, submitted[reporter.key])
+    assert_equal({ count: 1, sum_ms: 0, error_count: 0, slow_count: 0 }, submitted[reporter.key])
   end
 
   def test_background_flush_occurs

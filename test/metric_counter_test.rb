@@ -59,7 +59,8 @@ class MetricCounterTest < Minitest::Test
     expected = {
       count: 2,
       sum_ms: 300,
-      error_count: 1
+      error_count: 1,
+      slow_count: 0
     }
 
     assert_equal expected, counter.to_h

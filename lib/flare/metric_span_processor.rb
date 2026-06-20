@@ -26,9 +26,10 @@ module Flare
       "solid_cache" => "solid_cache"
     }.freeze
 
-    def initialize(storage:, http_metrics_config: nil)
+    def initialize(storage:, http_metrics_config: nil, slo_manager: nil)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
+      @slo_manager = slo_manager
       @pid = $$
     end
 
@@ -134,36 +135,45 @@ module Flare
         target = action ? "#{controller}##{action}" : controller
       end
 
+      service = "rails"
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "web",
-        service: "rails",
+        service: service,
         target: target,
         operation: http_status_class(span)
       )
 
+      duration = duration_ms(span)
+      error = http_error?(span)
       @storage.increment(
         key,
-        duration_ms: duration_ms(span),
-        error: http_error?(span)
+        duration_ms: duration,
+        error: error,
+        slow: slow?(namespace: "web", service: service, target: target, duration_ms: duration, error: error)
       )
     end
 
     def record_background_metric(span)
       transaction_name = span.attributes[Flare::TRANSACTION_NAME_ATTRIBUTE]
 
+      service = extract_job_system(span)
+      target = transaction_name || span.attributes["code.namespace"] || span.attributes["messaging.sidekiq.job_class"] || span.attributes["messaging.destination"] || "unknown"
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "job",
-        service: extract_job_system(span),
-        target: transaction_name || span.attributes["code.namespace"] || span.attributes["messaging.sidekiq.job_class"] || span.attributes["messaging.destination"] || "unknown",
+        service: service,
+        target: target,
         operation: transaction_name ? "perform" : (span.attributes["code.function"] || span.name)
       )
 
+      duration = duration_ms(span)
+      error = span_error?(span)
       @storage.increment(
         key,
-        duration_ms: duration_ms(span),
-        error: span_error?(span)
+        duration_ms: duration,
+        error: error,
+        slow: slow?(namespace: "job", service: service, target: target, duration_ms: duration, error: error)
       )
     end
 
@@ -276,6 +286,16 @@ module Flare
 
     def span_error?(span)
       span.status&.code == OpenTelemetry::Trace::Status::ERROR
+    end
+
+    # Latency SLI: an operation is "slow" when it exceeds its SLO threshold and
+    # did not error. Kept disjoint from errors so error_count + slow_count never
+    # double-counts. Untracked (no threshold configured) -> never slow.
+    def slow?(namespace:, service:, target:, duration_ms:, error:)
+      return false if error || @slo_manager.nil?
+
+      threshold = @slo_manager.threshold_for(namespace: namespace, service: service, target: target)
+      !threshold.nil? && duration_ms > threshold
     end
 
     def extract_job_system(span)

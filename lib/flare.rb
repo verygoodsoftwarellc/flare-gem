@@ -14,6 +14,7 @@ require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
 
+require_relative "flare/slo_manager"
 require_relative "flare/sampler"
 require_relative "flare/marker"
 require_relative "flare/web_marker_subscriber"
@@ -129,6 +130,13 @@ module Flare
   def marker          = @marker
   def upload_url_pool = @upload_url_pool
   def rule_manager    = @rule_manager
+
+  # Shared latency-SLO config. Updated by RuleManager from the /api/rules `slo`
+  # section and read by MetricSpanProcessor to compute slow_count. Memoized so a
+  # single instance is shared whether or not tracing submission is configured.
+  def slo_manager
+    @slo_manager ||= SloManager.new
+  end
   def trace_span_processor = @trace_span_processor
   def trace_health_reporter = @trace_health_reporter
 
@@ -261,6 +269,7 @@ module Flare
       sampler:     @sampler,
       marker:      @marker,
       pool:        @upload_url_pool,
+      slo_manager: slo_manager,
       base_url:    configuration.url,
       api_key:     configuration.key,
       project:     service_name_for_app,
@@ -335,7 +344,8 @@ module Flare
     @metric_storage ||= MetricStorage.new
     metric_processor = MetricSpanProcessor.new(
       storage: @metric_storage,
-      http_metrics_config: configuration.http_metrics_config
+      http_metrics_config: configuration.http_metrics_config,
+      slo_manager: slo_manager
     )
     OpenTelemetry.tracer_provider.add_span_processor(metric_processor)
 
@@ -344,7 +354,8 @@ module Flare
     if configuration.metrics_submission_configured?
       submitter = MetricSubmitter.new(
         endpoint: configuration.url,
-        api_key: configuration.key
+        api_key: configuration.key,
+        slo_manager: slo_manager
       )
       @metric_flusher = MetricFlusher.new(
         storage: @metric_storage,
@@ -534,6 +545,7 @@ module Flare
     @metric_flusher&.stop
     @metric_flusher = nil
     @metric_storage = nil
+    @slo_manager = nil
     @otel_configured = false
   end
 end
