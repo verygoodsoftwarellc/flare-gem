@@ -94,7 +94,7 @@ module Flare
           count: values[:count],
           sum_ms: values[:sum_ms],
           error_count: values[:error_count],
-          slow_count: values[:slow_count]
+          slow_count: values.fetch(:slow_count, 0)
         }
       end
 
