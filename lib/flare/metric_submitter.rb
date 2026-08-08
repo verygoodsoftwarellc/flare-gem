@@ -93,7 +93,8 @@ module Flare
           operation: key.operation,
           count: values[:count],
           sum_ms: values[:sum_ms],
-          error_count: values[:error_count]
+          error_count: values[:error_count],
+          slow_count: values.fetch(:slow_count, 0)
         }
       end
 

@@ -14,18 +14,21 @@ module Flare
       @count = Concurrent::AtomicFixnum.new(0)
       @sum_ms = Concurrent::AtomicFixnum.new(0)
       @error_count = Concurrent::AtomicFixnum.new(0)
+      @slow_count = Concurrent::AtomicFixnum.new(0)
     end
 
-    def increment(duration_ms:, error: false)
+    def increment(duration_ms:, error: false, slow: false)
       @count.increment
       @sum_ms.increment(duration_ms.to_i)
       @error_count.increment if error
+      @slow_count.increment if slow
     end
 
-    def add(count:, sum_ms:, error_count: 0)
+    def add(count:, sum_ms:, error_count: 0, slow_count: 0)
       @count.increment(count.to_i)
       @sum_ms.increment(sum_ms.to_i)
       @error_count.increment(error_count.to_i)
+      @slow_count.increment(slow_count.to_i)
     end
 
     def count
@@ -40,11 +43,16 @@ module Flare
       @error_count.value
     end
 
+    def slow_count
+      @slow_count.value
+    end
+
     def to_h
       {
         count: @count.value,
         sum_ms: @sum_ms.value,
-        error_count: @error_count.value
+        error_count: @error_count.value,
+        slow_count: @slow_count.value
       }
     end
   end

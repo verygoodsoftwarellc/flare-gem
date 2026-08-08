@@ -69,8 +69,8 @@ class MetricStorageTest < Minitest::Test
 
     # Check result has the data
     assert_equal 2, result.size
-    assert_equal({ count: 1, sum_ms: 100, error_count: 0 }, result[key1])
-    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, result[key2])
+    assert_equal({ count: 1, sum_ms: 100, error_count: 0, slow_count: 0 }, result[key1])
+    assert_equal({ count: 1, sum_ms: 50, error_count: 0, slow_count: 0 }, result[key2])
 
     # Check storage is now empty
     assert @storage.empty?

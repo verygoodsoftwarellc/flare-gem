@@ -4,18 +4,21 @@ require_relative "test_helper"
 require "flare/sampler"
 require "flare/marker"
 require "flare/upload_url_pool"
+require "flare/slo_manager"
 require "flare/rule_manager"
 
 class RuleManagerTest < Minitest::Test
   def setup
-    @sampler   = Flare::Sampler.new
-    @marker    = Flare::Marker.new
-    @pool      = Flare::UploadUrlPool.new
-    @transport = RecordingTransport.new
+    @sampler     = Flare::Sampler.new
+    @marker      = Flare::Marker.new
+    @pool        = Flare::UploadUrlPool.new
+    @slo_manager = Flare::SloManager.new
+    @transport   = RecordingTransport.new
     @manager   = Flare::RuleManager.new(
       sampler:     @sampler,
       marker:      @marker,
       pool:        @pool,
+      slo_manager: @slo_manager,
       base_url:    "https://flare.example",
       api_key:     "push_abc",
       project:     "demo-app",
@@ -23,6 +26,44 @@ class RuleManagerTest < Minitest::Test
       transport:   @transport,
       logger:      Logger.new(IO::NULL)
     )
+  end
+
+  def test_200_applies_slo_rules
+    @transport.queue(
+      ok({
+        "trace_rules" => [],
+        "slo_rules" => [
+          { "namespace" => "web", "threshold_ms" => 1000 },
+          { "namespace" => "job", "threshold_ms" => 60000 },
+          { "namespace" => "web", "service" => "rails",
+            "target" => "FeedsController#serve_feed", "threshold_ms" => 250 }
+        ]
+      }, etag: '"slo1"')
+    )
+
+    @manager.poll_now
+
+    assert_equal({ "web" => 1000, "job" => 60000 }, @slo_manager.defaults)
+    assert_equal 250, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "FeedsController#serve_feed")
+  end
+
+  def test_200_without_slo_rules_clears_slo_config
+    @slo_manager.update([{ "namespace" => "web", "threshold_ms" => 1000 }])
+
+    @transport.queue(ok({ "trace_rules" => [] }))
+    @manager.poll_now
+
+    assert_equal({}, @slo_manager.defaults)
+  end
+
+  def test_slo_delivered_even_with_no_trace_rules
+    @transport.queue(
+      ok({ "trace_rules" => [], "slo_rules" => [{ "namespace" => "web", "threshold_ms" => 800 }] })
+    )
+
+    @manager.poll_now
+
+    assert_equal 800, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "Any#thing")
   end
 
   def test_200_updates_sampler_and_pool_and_stores_etag
