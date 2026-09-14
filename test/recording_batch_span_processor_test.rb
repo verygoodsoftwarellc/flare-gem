@@ -51,6 +51,25 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     processor&.shutdown(timeout: 1)
   end
 
+  def test_force_flush_returns_failure_from_export_it_waited_on
+    exporter = BlockingExporter.new(result: OpenTelemetry::SDK::Trace::Export::FAILURE)
+    processor = Flare::RecordingBatchSpanProcessor.new(
+      exporter,
+      schedule_delay: 1,
+      max_export_batch_size: 1
+    )
+    processor.on_finish(MockSpan.new(SpanData.new("trace", false)))
+    exporter.wait_until_started
+    Thread.new { sleep 0.02; exporter.release }
+
+    result = processor.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::FAILURE, result
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_clears_inherited_buffers_after_fork
     tempfile = Tempfile.new("flare-local-export")
     tempfile.close
@@ -110,15 +129,25 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
   end
 
   class BlockingExporter
-    def initialize
+    def initialize(result: SUCCESS)
       @mutex = Mutex.new
       @condition = ConditionVariable.new
+      @started = false
       @released = false
+      @result = result
     end
 
     def export(_spans, timeout: nil)
-      @mutex.synchronize { @condition.wait(@mutex) until @released }
-      SUCCESS
+      @mutex.synchronize do
+        @started = true
+        @condition.broadcast
+        @condition.wait(@mutex) until @released
+      end
+      @result
+    end
+
+    def wait_until_started
+      @mutex.synchronize { @condition.wait(@mutex) until @started }
     end
 
     def release

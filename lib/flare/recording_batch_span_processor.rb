@@ -49,7 +49,8 @@ module Flare
 
       snapshot = snapshot_for_flush
       operation = start_flush_export(snapshot, deadline)
-      wait_for_flush_export(operation, deadline)
+      result = wait_for_flush_export(operation, deadline)
+      [@flush_prior_result, result].max
     rescue StandardError => e
       log_export_error(e)
       FAILURE
@@ -87,6 +88,9 @@ module Flare
       @condition = ConditionVariable.new
       @queue = []
       @active_exports = 0
+      @export_completion_sequence = 0
+      @last_export_result = SUCCESS
+      @flush_prior_result = SUCCESS
       @flush_owner = nil
       @stopped = false
       @worker = nil
@@ -105,14 +109,15 @@ module Flare
           @queue.shift(@max_export_batch_size)
         end
 
-        export_batch(batch, timeout: @exporter_timeout)
+        result = export_batch(batch, timeout: @exporter_timeout)
       ensure
-        export_finished if batch
+        export_finished(result || FAILURE) if batch
       end
     end
 
     def begin_flush(deadline)
       @mutex.synchronize do
+        initial_sequence = @export_completion_sequence
         while @flush_owner && @flush_owner != Thread.current
           return false if deadline.expired?
 
@@ -124,6 +129,11 @@ module Flare
           return false if deadline.expired?
 
           @condition.wait(@mutex, deadline.remaining)
+        end
+        @flush_prior_result = if @export_completion_sequence > initial_sequence
+          @last_export_result
+        else
+          SUCCESS
         end
       end
       true
@@ -168,8 +178,7 @@ module Flare
       ensure
         @mutex.synchronize do
           operation[:done] = true
-          @active_exports -= 1
-          @condition.broadcast
+          complete_export(operation[:result])
         end
       end
       operation
@@ -194,11 +203,17 @@ module Flare
       FAILURE
     end
 
-    def export_finished
+    def export_finished(result)
       @mutex.synchronize do
-        @active_exports -= 1
-        @condition.broadcast
+        complete_export(result)
       end
+    end
+
+    def complete_export(result)
+      @active_exports -= 1
+      @export_completion_sequence += 1
+      @last_export_result = result || FAILURE
+      @condition.broadcast
     end
 
     def detect_forking

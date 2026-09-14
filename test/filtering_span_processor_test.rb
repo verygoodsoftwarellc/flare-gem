@@ -228,6 +228,22 @@ class FilteringSpanProcessorTest < Minitest::Test
     processor&.shutdown(timeout: 1)
   end
 
+  def test_force_flush_returns_failure_from_export_it_waited_on
+    exporter = BlockingExporter.new(result: OpenTelemetry::SDK::Trace::Export::FAILURE)
+    processor = build_processor(exporter)
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil))
+    exporter.wait_until_started
+    Thread.new { sleep 0.02; exporter.release }
+
+    result = processor.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::FAILURE, result
+    assert_equal 1, processor.failed_export_count.value
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_forked_child_does_not_wait_on_inherited_in_flight_state
     processor = build_processor(RecordingExporter.new)
     processor.instance_variable_set(:@active_exports, 1)
@@ -355,13 +371,14 @@ class FilteringSpanProcessorTest < Minitest::Test
   class BlockingExporter
     attr_reader :max_concurrent_exports
 
-    def initialize
+    def initialize(result: OpenTelemetry::SDK::Trace::Export::SUCCESS)
       @mutex = Mutex.new
       @condition = ConditionVariable.new
       @started = false
       @released = false
       @concurrent_exports = 0
       @max_concurrent_exports = 0
+      @result = result
     end
 
     def export(_spans, timeout: nil)
@@ -373,7 +390,7 @@ class FilteringSpanProcessorTest < Minitest::Test
         @condition.wait(@mutex) until @released
         @concurrent_exports -= 1
       end
-      OpenTelemetry::SDK::Trace::Export::SUCCESS
+      @result
     end
 
     def wait_until_started

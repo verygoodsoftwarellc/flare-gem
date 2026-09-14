@@ -171,7 +171,7 @@ module Flare
 
     def reserve_background_submission
       @submission_mutex.synchronize do
-        return false if @flush_owner
+        return false if @flush_owner || @pending_submissions.positive?
 
         @pending_submissions += 1
         true
@@ -192,8 +192,7 @@ module Flare
       drained = @storage.drain
       return [0, nil, false] if drained.empty?
 
-      count, error = submit_metrics(drained, timeout: deadline.remaining)
-      [count, error, deadline.expired?]
+      submit_with_deadline(drained, deadline)
     ensure
       finish_synchronous_flush if @flush_owner == Thread.current
     end
@@ -234,6 +233,37 @@ module Flare
       else
         @submitter.submit(drained)
       end
+    end
+
+    def submit_with_deadline(drained, deadline)
+      operation = { done: false, count: 0, error: nil }
+      @submission_mutex.synchronize { @pending_submissions += 1 }
+      Thread.new do
+        operation[:count], operation[:error] = submit_metrics(drained, timeout: deadline.remaining)
+      rescue => e
+        operation[:error] = e
+      ensure
+        @submission_mutex.synchronize do
+          operation[:done] = true
+          @pending_submissions -= 1
+          @submission_condition.broadcast
+        end
+      end
+
+      @submission_mutex.synchronize do
+        until operation[:done]
+          return [0, nil, true] if deadline.expired?
+
+          @submission_condition.wait(@submission_mutex, deadline.remaining)
+        end
+      end
+
+      timed_out = deadline.expired? || deadline_error?(operation[:error])
+      [operation[:count], operation[:error], timed_out]
+    end
+
+    def deadline_error?(error)
+      defined?(MetricSubmitter::DeadlineExceeded) && error.is_a?(MetricSubmitter::DeadlineExceeded)
     end
 
     def record_health_metrics

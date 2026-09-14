@@ -4,6 +4,7 @@ require_relative "test_helper"
 require "flare/metric_key"
 require "flare/metric_storage"
 require "flare/metric_flusher"
+require "flare/metric_submitter"
 
 class MetricFlusherTest < Minitest::Test
   def setup
@@ -174,6 +175,36 @@ class MetricFlusherTest < Minitest::Test
     flusher&.stop
   end
 
+  def test_force_flush_is_bounded_when_submitter_ignores_timeout
+    submitter = BlockingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = flusher.force_flush(timeout: 0.02)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+    assert_operator elapsed, :<, 0.1
+  ensure
+    submitter&.release
+    flusher&.stop
+  end
+
+  def test_force_flush_maps_deadline_submission_error_to_timeout
+    submitter = DeadlineSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+
+    result = flusher.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+  ensure
+    flusher&.stop
+  end
+
   private
 
   def create_key(namespace, service, target, operation)
@@ -245,6 +276,12 @@ class MetricFlusherTest < Minitest::Test
         @released = true
         @condition.broadcast
       end
+    end
+  end
+
+  class DeadlineSubmitter
+    def submit(_drained, timeout: nil)
+      [0, Flare::MetricSubmitter::DeadlineExceeded.new("deadline")]
     end
   end
 end

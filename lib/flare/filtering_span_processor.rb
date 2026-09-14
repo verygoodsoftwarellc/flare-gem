@@ -51,6 +51,8 @@ module Flare
       @cond             = ConditionVariable.new
       @stopped          = false
       @active_exports   = 0
+      @export_completion_sequence = 0
+      @last_export_result = SUCCESS
       @flush_owner      = nil
       @pid              = $$
 
@@ -86,12 +88,14 @@ module Flare
       detect_forking
       deadline = Deadline.new(timeout)
       return TIMEOUT unless begin_flush(deadline)
+      prior_result = @flush_prior_result
 
       batch = snapshot_for_flush(deadline)
       return TIMEOUT unless batch
 
       operation = start_flush_export(batch, deadline)
-      wait_for_flush_export(operation, deadline)
+      result = wait_for_flush_export(operation, deadline)
+      [prior_result, result].max
     ensure
       finish_flush if @flush_owner == Thread.current
     end
@@ -173,15 +177,16 @@ module Flare
         @active_exports += 1
       end
 
-      export_batch(batch, timeout: @export_timeout)
+      result = export_batch(batch, timeout: @export_timeout)
     ensure
-      export_finished if batch
+      export_finished(result || FAILURE) if batch
     end
 
     def begin_flush(deadline)
       return false unless lock_before_deadline(deadline)
 
       begin
+        initial_sequence = @export_completion_sequence
         while @flush_owner && @flush_owner != Thread.current
           return false if deadline.expired?
 
@@ -193,6 +198,11 @@ module Flare
           return false if deadline.expired?
 
           @cond.wait(@mutex, deadline.remaining)
+        end
+        @flush_prior_result = if @export_completion_sequence > initial_sequence
+          @last_export_result
+        else
+          SUCCESS
         end
       ensure
         @mutex.unlock
@@ -242,8 +252,7 @@ module Flare
       ensure
         @mutex.synchronize do
           operation[:done] = true
-          @active_exports -= 1
-          @cond.broadcast
+          complete_export(operation[:result])
         end
       end
       operation
@@ -270,11 +279,17 @@ module Flare
       FAILURE
     end
 
-    def export_finished
+    def export_finished(result)
       @mutex.synchronize do
-        @active_exports -= 1
-        @cond.broadcast
+        complete_export(result)
       end
+    end
+
+    def complete_export(result)
+      @active_exports -= 1
+      @export_completion_sequence += 1
+      @last_export_result = result || FAILURE
+      @cond.broadcast
     end
 
     def lock_before_deadline(deadline)
@@ -395,6 +410,9 @@ module Flare
       @delayed_ready_by_trace = {}
       @pending_count = 0
       @active_exports = 0
+      @export_completion_sequence = 0
+      @last_export_result = SUCCESS
+      @flush_prior_result = SUCCESS
       @flush_owner = nil
       @stopped = false
       @worker = nil
