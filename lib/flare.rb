@@ -13,6 +13,7 @@ require_relative "flare/metric_span_processor"
 require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
+require_relative "flare/recording_batch_span_processor"
 
 require_relative "flare/sampler"
 require_relative "flare/marker"
@@ -88,7 +89,7 @@ module Flare
   end
 
   def span_processor
-    @span_processor ||= OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(
+    @span_processor ||= RecordingBatchSpanProcessor.new(
       exporter,
       max_queue_size: 1000,
       max_export_batch_size: 100,
