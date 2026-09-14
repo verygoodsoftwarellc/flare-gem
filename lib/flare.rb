@@ -14,6 +14,7 @@ require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
 require_relative "flare/recording_batch_span_processor"
+require_relative "flare/lifecycle"
 
 require_relative "flare/sampler"
 require_relative "flare/marker"

@@ -7,6 +7,7 @@ require "stringio"
 require "securerandom"
 
 require_relative "client_headers"
+require_relative "deadline"
 
 module Flare
   # Submits metrics to the Flare metrics service via HTTP.
@@ -45,6 +46,8 @@ module Flare
       end
     end
 
+    class DeadlineExceeded < StandardError; end
+
     attr_reader :endpoint, :api_key, :backoff_policy
 
     def initialize(endpoint:, api_key:, project: nil, environment: nil, backoff_policy: nil, open_timeout: nil, read_timeout: nil, write_timeout: nil)
@@ -60,23 +63,28 @@ module Flare
 
     # Submit drained metrics to the server.
     # Returns [success_count, error] where error may be nil on success.
-    def submit(drained)
+    def submit(drained, timeout: nil)
       return [0, nil] if drained.empty?
 
+      deadline = Deadline.new(timeout)
+
       request_id = SecureRandom.uuid
-      Flare.log "Submitting #{drained.size} metrics to #{@endpoint} (request_id=#{request_id})"
+      Flare.log "Submitting #{drained.size} metrics to #{@endpoint} (request_id=#{request_id})" if Flare.respond_to?(:log)
 
       body = build_body(drained, request_id)
       return [0, nil] if body.nil?
+      return [0, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
 
       @backoff_policy.reset
-      response, error = retry_with_backoff(MAX_RETRIES) { post(body, request_id) }
+      response, error = retry_with_backoff(MAX_RETRIES, deadline: deadline) do
+        post(body, request_id, timeout: deadline.remaining)
+      end
 
       if error
-        Flare.log "Submission failed: #{error.message} (request_id=#{request_id})"
+        Flare.log "Submission failed: #{error.message} (request_id=#{request_id})" if Flare.respond_to?(:log)
         [0, error]
       else
-        Flare.log "Submission succeeded: #{response.code} (request_id=#{request_id})"
+        Flare.log "Submission succeeded: #{response.code} (request_id=#{request_id})" if Flare.respond_to?(:log)
         [drained.size, nil]
       end
     end
@@ -111,12 +119,14 @@ module Flare
       nil
     end
 
-    def post(body, request_id)
+    def post(body, request_id, timeout: nil)
+      raise DeadlineExceeded, "metric submission deadline exceeded" if timeout == 0
+
       http = Net::HTTP.new(@endpoint.host, @endpoint.port)
       http.use_ssl = @endpoint.scheme == "https"
-      http.open_timeout = @open_timeout
-      http.read_timeout = @read_timeout
-      http.write_timeout = @write_timeout if http.respond_to?(:write_timeout=)
+      http.open_timeout = effective_timeout(@open_timeout, timeout)
+      http.read_timeout = effective_timeout(@read_timeout, timeout)
+      http.write_timeout = effective_timeout(@write_timeout, timeout) if http.respond_to?(:write_timeout=)
 
       request_uri = @endpoint.request_uri
       request = Net::HTTP::Post.new(request_uri == "" ? "/" : request_uri)
@@ -158,20 +168,27 @@ module Flare
       )
     end
 
-    def retry_with_backoff(max_attempts)
+    def retry_with_backoff(max_attempts, deadline:)
       attempts_remaining = max_attempts
       last_error = nil
 
       while attempts_remaining > 0
         begin
+          return [nil, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
+
           result, should_retry = yield
+          return [nil, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
           return [result, nil] unless should_retry
-        rescue SubmissionError, Net::OpenTimeout, Net::ReadTimeout, Errno::ECONNREFUSED, Errno::ECONNRESET => e
+        rescue SubmissionError, Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout, Errno::ECONNREFUSED, Errno::ECONNRESET => e
           last_error = e
           attempts_remaining -= 1
 
           if attempts_remaining > 0
             sleep_time = @backoff_policy.next_interval / 1000.0
+            remaining = deadline.remaining
+            if remaining && sleep_time >= remaining
+              return [nil, DeadlineExceeded.new("metric submission deadline exceeded")]
+            end
             sleep(sleep_time)
           end
           next
@@ -182,6 +199,12 @@ module Flare
       end
 
       [nil, last_error]
+    end
+
+    def effective_timeout(configured_timeout, remaining)
+      return configured_timeout unless remaining
+
+      [configured_timeout, remaining].min
     end
 
     def gzip(string)
