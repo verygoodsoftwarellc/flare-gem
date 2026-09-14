@@ -31,6 +31,15 @@ class MetricSubmitterTest < Minitest::Test
     assert_equal 1, submitter.timeouts.length
   end
 
+  def test_successful_response_after_deadline_is_reported_as_timeout
+    submitter = TestSubmitter.new(delay: 0.05)
+
+    count, error = submitter.submit(metrics, timeout: 0.01)
+
+    assert_equal 0, count
+    assert_instance_of Flare::MetricSubmitter::DeadlineExceeded, error
+  end
+
   private
 
   def metrics
@@ -53,7 +62,7 @@ class MetricSubmitterTest < Minitest::Test
   class TestSubmitter < Flare::MetricSubmitter
     attr_reader :timeouts
 
-    def initialize(backoff_policy: nil, error: nil)
+    def initialize(backoff_policy: nil, error: nil, delay: 0)
       super(
         endpoint: "https://flare.example",
         api_key: "key",
@@ -62,6 +71,7 @@ class MetricSubmitterTest < Minitest::Test
         backoff_policy: backoff_policy
       )
       @error = error
+      @delay = delay
       @timeouts = []
     end
 
@@ -69,6 +79,7 @@ class MetricSubmitterTest < Minitest::Test
 
     def post(_body, _request_id, timeout: nil)
       @timeouts << timeout
+      sleep @delay
       raise @error if @error
 
       [Response.new("202"), false]

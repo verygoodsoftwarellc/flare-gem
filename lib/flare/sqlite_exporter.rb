@@ -29,12 +29,12 @@ module Flare
     def export(span_datas, timeout: nil)
       detect_forking
       deadline = Deadline.new(timeout)
-      setup_database unless @setup
 
       retries = 0
       exported = 0
 
       begin
+        setup_database(deadline) unless @setup
         raise ExportDeadlineExceeded if deadline.expired?
         raise ExportDeadlineExceeded unless lock_before_deadline(deadline)
 
@@ -205,14 +205,16 @@ module Flare
       end
     end
 
-    def setup_database
-      @mutex.synchronize do
+    def setup_database(deadline)
+      raise ExportDeadlineExceeded unless lock_before_deadline(deadline)
+
+      begin
         return if @setup
 
         db = connection
-        configure_pragmas(db)
+        configure_pragmas(db, deadline)
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE TABLE IF NOT EXISTS flare_spans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -230,23 +232,23 @@ module Flare
           )
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_spans_span_id ON flare_spans(span_id)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_spans_trace_id ON flare_spans(trace_id)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_spans_parent_span_id ON flare_spans(parent_span_id)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_spans_created_at ON flare_spans(created_at)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE TABLE IF NOT EXISTS flare_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             span_id INTEGER NOT NULL,
@@ -257,11 +259,11 @@ module Flare
           )
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_events_span_id ON flare_events(span_id)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE TABLE IF NOT EXISTS flare_properties (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key TEXT NOT NULL,
@@ -274,27 +276,37 @@ module Flare
           )
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_properties_owner ON flare_properties(owner_type, owner_id)
         SQL
 
-        db.execute(<<~SQL)
+        execute_setup(db, deadline, <<~SQL)
           CREATE INDEX IF NOT EXISTS idx_properties_key ON flare_properties(key)
         SQL
 
         close_connection # avoid inheriting connection across fork
         @setup = true
+      ensure
+        @mutex.unlock
       end
     end
 
     # Applies the same SQLite pragmas that ActiveRecord uses for good
     # concurrency and performance with threaded/multi-process access.
-    def configure_pragmas(db)
-      db.execute("PRAGMA journal_mode=WAL")
-      db.execute("PRAGMA synchronous=NORMAL")
-      db.execute("PRAGMA mmap_size=134217728")        # 128MB
-      db.execute("PRAGMA journal_size_limit=67108864") # 64MB
-      db.execute("PRAGMA cache_size=2000")
+    def configure_pragmas(db, deadline)
+      execute_setup(db, deadline, "PRAGMA journal_mode=WAL")
+      execute_setup(db, deadline, "PRAGMA synchronous=NORMAL")
+      execute_setup(db, deadline, "PRAGMA mmap_size=134217728")         # 128MB
+      execute_setup(db, deadline, "PRAGMA journal_size_limit=67108864") # 64MB
+      execute_setup(db, deadline, "PRAGMA cache_size=2000")
+    end
+
+    def execute_setup(db, deadline, statement)
+      raise ExportDeadlineExceeded if deadline.expired?
+
+      apply_busy_timeout(deadline)
+      db.execute(statement)
+      raise ExportDeadlineExceeded if deadline.expired?
     end
 
     def connection_key

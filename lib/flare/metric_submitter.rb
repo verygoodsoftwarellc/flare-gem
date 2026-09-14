@@ -177,6 +177,7 @@ module Flare
           return [nil, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
 
           result, should_retry = yield
+          return [nil, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
           return [result, nil] unless should_retry
         rescue SubmissionError, Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout, Errno::ECONNREFUSED, Errno::ECONNRESET => e
           last_error = e
