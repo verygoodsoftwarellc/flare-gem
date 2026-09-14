@@ -28,6 +28,45 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     refute @exporter.exports.flatten.first.trace_flags.sampled?
   end
 
+  def test_exports_sampled_and_record_only_spans_unchanged
+    sampled = SpanData.new("sampled", true)
+    record_only = SpanData.new("record-only", false)
+
+    @processor.on_finish(MockSpan.new(sampled))
+    @processor.on_finish(MockSpan.new(record_only))
+
+    assert_equal SUCCESS, @processor.force_flush(timeout: 1)
+    assert_equal [sampled, record_only], @exporter.exports.flatten
+  end
+
+  def test_bounded_queue_drops_oldest_spans_on_overflow
+    processor = Flare::RecordingBatchSpanProcessor.new(
+      @exporter,
+      max_queue_size: 3,
+      max_export_batch_size: 3,
+      schedule_delay: 60_000,
+      logger: Logger.new(IO::NULL)
+    )
+
+    5.times do |index|
+      processor.on_finish(MockSpan.new(SpanData.new("span-#{index}", false)))
+    end
+    processor.force_flush(timeout: 1)
+
+    assert_equal %w[span-2 span-3 span-4], @exporter.exports.flatten.map(&:trace_id)
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_shutdown_drains_remaining_spans_and_shuts_down_exporter
+    @processor.on_finish(MockSpan.new(SpanData.new("pending", false)))
+
+    assert_equal SUCCESS, @processor.shutdown(timeout: 1)
+
+    assert_equal ["pending"], @exporter.exports.flatten.map(&:trace_id)
+    assert @exporter.shutdown?
+  end
+
   def test_exports_asynchronously
     @processor.on_finish(MockSpan.new(SpanData.new("trace", false)))
 
@@ -92,6 +131,31 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     tempfile&.close!
   end
 
+  def test_restarts_worker_after_fork
+    tempfile = Tempfile.new("flare-local-export")
+    tempfile.close
+    exporter = RecordingExporter.new(path: tempfile.path)
+    processor = Flare::RecordingBatchSpanProcessor.new(
+      exporter,
+      max_queue_size: 10,
+      max_export_batch_size: 1,
+      schedule_delay: 50,
+      logger: Logger.new(IO::NULL)
+    )
+
+    pid = fork do
+      processor.on_finish(MockSpan.new(SpanData.new("child", false)))
+      sleep 0.15
+      exit!
+    end
+    Process.wait(pid)
+
+    assert_equal ["child"], File.readlines(tempfile.path, chomp: true)
+  ensure
+    processor&.shutdown(timeout: 1)
+    tempfile&.close!
+  end
+
   private
 
   SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
@@ -116,6 +180,7 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     def initialize(path: nil)
       @exports = []
       @path = path
+      @shutdown = false
     end
 
     def export(spans, timeout: nil)
@@ -125,7 +190,12 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     end
 
     def force_flush(timeout: nil) = SUCCESS
-    def shutdown(timeout: nil) = SUCCESS
+    def shutdown(timeout: nil)
+      @shutdown = true
+      SUCCESS
+    end
+
+    def shutdown? = @shutdown
   end
 
   class BlockingExporter
