@@ -133,6 +133,16 @@ class TraceExporterTest < Minitest::Test
     assert_equal SUCCESS, @exporter.shutdown
   end
 
+  def test_passes_one_remaining_timeout_through_put_and_notify
+    @pool.replace([upload("u1")])
+    @transport.responses_for(:put) << http(200)
+    @transport.responses_for(:post) << http(202)
+
+    assert_equal SUCCESS, @exporter.export([span("a", trace: "t1")], timeout: 0.5)
+    assert_operator @transport.calls(:put).first[:timeout], :<=, 0.5
+    assert_operator @transport.calls(:post).first[:timeout], :<, @transport.calls(:put).first[:timeout]
+  end
+
   private
 
   def span(suffix, trace:)
@@ -166,12 +176,12 @@ class TraceExporterTest < Minitest::Test
       @calls     = Hash.new { |h, k| h[k] = [] }
     end
 
-    def put(url, body, headers)
-      record(:put, url, body, headers)
+    def put(url, body, headers, timeout: nil)
+      record(:put, url, body, headers, timeout)
     end
 
-    def post(url, body, headers)
-      record(:post, url, body, headers)
+    def post(url, body, headers, timeout: nil)
+      record(:post, url, body, headers, timeout)
     end
 
     def responses_for(method) = @responses[method]
@@ -179,8 +189,8 @@ class TraceExporterTest < Minitest::Test
 
     private
 
-    def record(method, url, body, headers)
-      @calls[method] << { url: url, body: body, headers: headers }
+    def record(method, url, body, headers, timeout)
+      @calls[method] << { url: url, body: body, headers: headers, timeout: timeout }
       @responses[method].shift || Flare::HttpTransport::Response.new(code: "200", body: "")
     end
   end

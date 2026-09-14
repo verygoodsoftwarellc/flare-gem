@@ -50,6 +50,28 @@ class SQLiteExporterTest < Minitest::Test
     assert_equal Flare::SQLiteExporter::SUCCESS, result
   end
 
+  def test_export_timeout_includes_waiting_for_export_lock
+    @exporter.export([])
+    mutex = @exporter.instance_variable_get(:@mutex)
+    locked = Queue.new
+    holder = Thread.new do
+      mutex.synchronize do
+        locked << true
+        sleep 0.1
+      end
+    end
+    locked.pop
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = @exporter.export([mock_span_data], timeout: 0.02)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal Flare::SQLiteExporter::TIMEOUT, result
+    assert_operator elapsed, :<, 0.1
+  ensure
+    holder&.join
+  end
+
   def test_export_creates_span_record
     span_data = mock_span_data(
       name: "GET /users",

@@ -3,6 +3,8 @@
 require "sqlite3"
 require "json"
 
+require_relative "deadline"
+
 module Flare
   class SQLiteExporter
     SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
@@ -16,45 +18,61 @@ module Flare
       @database_path = database_path
       @mutex = Mutex.new
       @setup = false
+      @pid = $$
     end
 
     # Maximum number of retry attempts when the database is busy.
     # Mirrors ActiveRecord's retry strategy for SQLite.
     MAX_RETRIES = 3
+    ExportDeadlineExceeded = Class.new(StandardError)
 
     def export(span_datas, timeout: nil)
+      detect_forking
+      deadline = Deadline.new(timeout)
       setup_database unless @setup
 
       retries = 0
       exported = 0
 
       begin
-        @mutex.synchronize do
+        raise ExportDeadlineExceeded if deadline.expired?
+        raise ExportDeadlineExceeded unless lock_before_deadline(deadline)
+
+        begin
+          apply_busy_timeout(deadline)
           connection.transaction do
             span_datas.each do |span_data|
+              raise ExportDeadlineExceeded if deadline.expired?
               next if should_ignore_span?(span_data)
 
               create_span(span_data)
               exported += 1
             end
           end
+        ensure
+          @mutex.unlock
         end
+      rescue ExportDeadlineExceeded
+        return TIMEOUT
       rescue ::SQLite3::BusyException
         retries += 1
         if retries <= MAX_RETRIES
-          sleep 0.1 * retries
+          sleep_time = 0.1 * retries
+          return TIMEOUT if deadline.remaining && sleep_time >= deadline.remaining
+
+          sleep(sleep_time)
           retry
         end
         warn "[Flare] SQLite export error: database is busy after #{MAX_RETRIES} retries"
         return FAILURE
       end
 
-      Flare.log "Exported #{exported} spans to SQLite" if exported > 0
+      Flare.log "Exported #{exported} spans to SQLite" if exported > 0 && Flare.respond_to?(:log)
 
       # Periodically prune old data
-      maybe_prune
+      maybe_prune unless deadline.expired?
 
-      SUCCESS
+      deadline.expired? ? TIMEOUT : SUCCESS
     rescue => e
       warn "[Flare] SQLite export error: #{e.message}"
       FAILURE
@@ -69,6 +87,31 @@ module Flare
     end
 
     private
+
+    def detect_forking
+      return if @pid == $$
+
+      @pid = $$
+      @mutex = Mutex.new
+      close_connection
+    end
+
+    def lock_before_deadline(deadline)
+      return @mutex.lock unless deadline.remaining
+
+      until @mutex.try_lock
+        return false if deadline.expired?
+
+        sleep([deadline.remaining, 0.001].min)
+      end
+      true
+    end
+
+    def apply_busy_timeout(deadline)
+      remaining = deadline.remaining
+      timeout_ms = remaining ? [(remaining * 1_000).floor, 1].max : 5_000
+      connection.busy_timeout = [timeout_ms, 5_000].min
+    end
 
     def maybe_prune
       return unless rand < PRUNE_PROBABILITY

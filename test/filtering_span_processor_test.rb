@@ -139,8 +139,123 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 1, @exporter.exports.flatten.length
   end
 
+  def test_force_flush_waits_for_export_already_in_progress
+    exporter = BlockingExporter.new
+    processor = build_processor(exporter)
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil))
+    exporter.wait_until_started
+    processor.on_finish(span(trace_id: "t2", span_id: "child", sampled: true, parent_span_id: "root"))
+
+    result = nil
+    flush = Thread.new { result = processor.force_flush(timeout: 1) }
+    sleep 0.05
+    assert flush.alive?
+
+    exporter.release
+    flush.join
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS, result
+    assert_equal 1, exporter.max_concurrent_exports
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_force_flush_times_out_while_export_is_in_progress
+    exporter = BlockingExporter.new
+    processor = build_processor(exporter)
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil))
+    exporter.wait_until_started
+
+    result = processor.force_flush(timeout: 0.02)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_force_flush_stays_bounded_when_queued_export_ignores_timeout
+    exporter = BlockingExporter.new
+    processor = Flare::FilteringSpanProcessor.new(
+      exporter: exporter,
+      marker: @marker,
+      flush_interval: 60,
+      logger: Logger.new(IO::NULL)
+    )
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = processor.force_flush(timeout: 0.02)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+    assert_operator elapsed, :<, 0.1
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_force_flush_timeout_includes_queue_lock_acquisition
+    mutex = @processor.instance_variable_get(:@mutex)
+    locked = Queue.new
+    holder = Thread.new do
+      mutex.synchronize do
+        locked << true
+        sleep 0.1
+      end
+    end
+    locked.pop
+
+    result = @processor.force_flush(timeout: 0.02)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+  ensure
+    holder&.join
+  end
+
+  def test_force_flush_succeeds_when_in_progress_export_completes_before_deadline
+    exporter = BlockingExporter.new
+    processor = build_processor(exporter)
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil))
+    exporter.wait_until_started
+    Thread.new { sleep 0.02; exporter.release }
+
+    result = processor.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS, result
+  ensure
+    exporter&.release
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_forked_child_does_not_wait_on_inherited_in_flight_state
+    processor = build_processor(RecordingExporter.new)
+    processor.instance_variable_set(:@active_exports, 1)
+    processor.instance_variable_set(:@flush_owner, Object.new)
+    reader, writer = IO.pipe
+
+    pid = fork do
+      reader.close
+      writer.write(processor.force_flush(timeout: 0.1).to_s)
+      writer.close
+      exit!
+    end
+    writer.close
+    Process.wait(pid)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS.to_s, reader.read
+  ensure
+    reader&.close
+    writer&.close unless writer&.closed?
+    processor.instance_variable_set(:@active_exports, 0) if processor
+    processor.instance_variable_set(:@flush_owner, nil) if processor
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_restarts_worker_after_fork
-    exporter = RecordingExporter.new(path: Tempfile.new("flare-trace-export").path)
+    tempfile = Tempfile.new("flare-trace-export")
+    tempfile.close
+    exporter = RecordingExporter.new(path: tempfile.path)
     processor = Flare::FilteringSpanProcessor.new(
       exporter:       exporter,
       marker:         @marker,
@@ -159,13 +274,15 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 1, File.readlines(exporter.path).length
   ensure
     processor&.shutdown(timeout: 1)
-    FileUtils.rm_f(exporter&.path)
+    tempfile&.close!
   end
 
   # Without buffer clearing on fork, the child inherits the parent's pending
   # spans and re-exports them — producing duplicate R2 uploads.
   def test_clears_inherited_buffers_after_fork
-    exporter = RecordingExporter.new(path: Tempfile.new("flare-trace-export").path)
+    tempfile = Tempfile.new("flare-trace-export")
+    tempfile.close
+    exporter = RecordingExporter.new(path: tempfile.path)
     processor = Flare::FilteringSpanProcessor.new(
       exporter:       exporter,
       marker:         @marker,
@@ -187,10 +304,19 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 2, exported_span_count
   ensure
     processor&.shutdown(timeout: 1)
-    FileUtils.rm_f(exporter&.path)
+    tempfile&.close!
   end
 
   private
+
+  def build_processor(exporter)
+    Flare::FilteringSpanProcessor.new(
+      exporter: exporter,
+      marker: @marker,
+      flush_interval: 0.01,
+      logger: Logger.new(IO::NULL)
+    )
+  end
 
   def wait_until(timeout: 1)
     deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
@@ -223,6 +349,46 @@ class FilteringSpanProcessorTest < Minitest::Test
     end
 
     def shutdown(timeout: nil); end
+    def force_flush(timeout: nil) = OpenTelemetry::SDK::Trace::Export::SUCCESS
+  end
+
+  class BlockingExporter
+    attr_reader :max_concurrent_exports
+
+    def initialize
+      @mutex = Mutex.new
+      @condition = ConditionVariable.new
+      @started = false
+      @released = false
+      @concurrent_exports = 0
+      @max_concurrent_exports = 0
+    end
+
+    def export(_spans, timeout: nil)
+      @mutex.synchronize do
+        @concurrent_exports += 1
+        @max_concurrent_exports = [@max_concurrent_exports, @concurrent_exports].max
+        @started = true
+        @condition.broadcast
+        @condition.wait(@mutex) until @released
+        @concurrent_exports -= 1
+      end
+      OpenTelemetry::SDK::Trace::Export::SUCCESS
+    end
+
+    def wait_until_started
+      @mutex.synchronize { @condition.wait(@mutex) until @started }
+    end
+
+    def release
+      @mutex.synchronize do
+        @released = true
+        @condition.broadcast
+      end
+    end
+
+    def force_flush(timeout: nil) = OpenTelemetry::SDK::Trace::Export::SUCCESS
+    def shutdown(timeout: nil) = OpenTelemetry::SDK::Trace::Export::SUCCESS
   end
 
   class MockSpan
