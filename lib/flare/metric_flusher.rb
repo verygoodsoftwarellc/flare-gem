@@ -116,6 +116,8 @@ module Flare
     # on first span in the new process, or manually from Puma/Unicorn
     # after_fork hooks.
     def after_fork
+      return if @pid == $$
+
       @pid = $$
       @storage.after_fork if @storage.respond_to?(:after_fork)
       initialize_synchronization
