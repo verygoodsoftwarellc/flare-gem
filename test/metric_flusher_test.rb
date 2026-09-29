@@ -97,13 +97,48 @@ class MetricFlusherTest < Minitest::Test
     assert @submitter.submit_count >= 1
   end
 
-  def test_after_fork_keeps_running
+  def test_after_fork_in_child_restarts_once
     @flusher.start
     assert @flusher.running?
+    old_timer = @flusher.instance_variable_get(:@timer)
+    old_pool = @flusher.instance_variable_get(:@pool)
+    old_map = @storage.instance_variable_get(:@storage)
+    # simulate being in a forked child
+    @flusher.instance_variable_set(:@pid, $$ + 1)
+    @storage.instance_variable_set(:@pid, $$ + 1)
 
     @flusher.after_fork
 
     assert @flusher.running?
+    new_timer = @flusher.instance_variable_get(:@timer)
+    refute_same old_timer, new_timer
+    refute_same old_map, @storage.instance_variable_get(:@storage)
+
+    @flusher.after_fork
+
+    assert_same new_timer, @flusher.instance_variable_get(:@timer)
+  ensure
+    old_timer&.shutdown
+    old_pool&.shutdown
+  end
+
+  def test_after_fork_in_same_process_is_a_noop
+    @flusher.start
+    timer = @flusher.instance_variable_get(:@timer)
+    pool = @flusher.instance_variable_get(:@pool)
+    mutex = @flusher.instance_variable_get(:@submission_mutex)
+    condition = @flusher.instance_variable_get(:@submission_condition)
+
+    @flusher.after_fork
+
+    assert_same timer, @flusher.instance_variable_get(:@timer)
+    assert_same mutex, @flusher.instance_variable_get(:@submission_mutex)
+    assert_same condition, @flusher.instance_variable_get(:@submission_condition)
+  ensure
+    unless timer.equal?(@flusher.instance_variable_get(:@timer))
+      timer&.shutdown
+      pool&.shutdown
+    end
   end
 
   def test_flush_now_handles_nil_storage
