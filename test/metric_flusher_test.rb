@@ -192,6 +192,23 @@ class MetricFlusherTest < Minitest::Test
     flusher&.stop
   end
 
+  def test_after_fork_during_synchronous_flush_does_not_strand_the_flush
+    submitter = ForkSignallingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    submitter.flusher = flusher
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = flusher.force_flush(timeout: 2)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS, result
+    assert_operator elapsed, :<, 1
+  ensure
+    flusher&.stop
+  end
+
   def test_force_flush_maps_deadline_submission_error_to_timeout
     submitter = DeadlineSubmitter.new
     flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
@@ -218,6 +235,15 @@ class MetricFlusherTest < Minitest::Test
   end
 
   # Mock submitter for testing
+  class ForkSignallingSubmitter
+    attr_accessor :flusher
+
+    def submit(drained)
+      @flusher.after_fork
+      [drained.size, nil]
+    end
+  end
+
   class MockSubmitter
     attr_reader :submit_count, :submitted_data
 
