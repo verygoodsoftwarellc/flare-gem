@@ -100,10 +100,23 @@ class MetricFlusherTest < Minitest::Test
   def test_after_fork_keeps_running
     @flusher.start
     assert @flusher.running?
+    old_timer = @flusher.instance_variable_get(:@timer)
+    @flusher.instance_variable_set(:@pid, $$ + 1) # simulate being in a forked child
 
     @flusher.after_fork
 
     assert @flusher.running?
+    refute_same old_timer, @flusher.instance_variable_get(:@timer)
+    old_timer.shutdown
+  end
+
+  def test_after_fork_in_same_process_is_a_noop
+    @flusher.start
+    timer = @flusher.instance_variable_get(:@timer)
+
+    @flusher.after_fork
+
+    assert_same timer, @flusher.instance_variable_get(:@timer)
   end
 
   def test_flush_now_handles_nil_storage
