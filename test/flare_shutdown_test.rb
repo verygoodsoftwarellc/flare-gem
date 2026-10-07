@@ -91,6 +91,24 @@ class FlareShutdownTest < Minitest::Test
     refute_nil metrics.timeout
   end
 
+  def test_nil_timeout_uses_the_default_budget
+    metrics = FakeStoppable.new
+    spans = FakeStoppable.new
+    traces = FakeStoppable.new
+    @flare.configuration.spans_enabled = true
+    @flare.span_processor = spans
+    @flare.set(:@span_processor, spans)
+    @flare.set(:@metric_flusher, metrics)
+    @flare.set(:@trace_span_processor, traces)
+
+    _stdout, stderr = capture_io { @flare.shutdown(timeout: nil) }
+
+    assert_empty stderr
+    assert_in_delta Flare::Lifecycle::SHUTDOWN_TIMEOUT - Flare::Lifecycle::TRACE_SHUTDOWN_TIMEOUT, metrics.timeout, 0.1
+    assert_in_delta Flare::Lifecycle::TRACE_SHUTDOWN_TIMEOUT, spans.timeout, 0.1
+    assert_in_delta Flare::Lifecycle::TRACE_SHUTDOWN_TIMEOUT, traces.timeout, 0.1
+  end
+
   private
 
   def hanging_trace_processor
@@ -145,6 +163,7 @@ class FlareShutdownTest < Minitest::Test
       @timeout = timeout
       sleep @sleep_for
     end
+    alias_method :shutdown, :stop
   end
 
   class RaisingStoppable
