@@ -60,10 +60,10 @@ module Flare
       self
     end
 
-    def stop
+    def stop(timeout: 1)
       if @timer
         @timer.shutdown
-        @timer.wait_for_termination(1)
+        @timer.wait_for_termination(timeout)
         @timer.kill unless @timer.shutdown?
         @timer = nil
       end
