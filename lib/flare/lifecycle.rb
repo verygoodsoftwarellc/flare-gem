@@ -34,8 +34,9 @@ module Flare
     # finish well before the platform's kill deadline even if endpoints hang.
     # Metrics (a minute of aggregated counts) get first claim on the time;
     # span/trace processors get what's left, capped at TRACE_SHUTDOWN_TIMEOUT.
+    # A nil timeout means the default, not unbounded: shutdown is always bounded.
     def shutdown(timeout: SHUTDOWN_TIMEOUT)
-      deadline = Deadline.new(timeout)
+      deadline = Deadline.new(timeout || SHUTDOWN_TIMEOUT)
 
       shutdown_step("rule manager") { @rule_manager&.stop(timeout: 0) }
       shutdown_step("metrics") { @metric_flusher&.stop(timeout: [deadline.remaining - TRACE_SHUTDOWN_TIMEOUT, 0].max) }
