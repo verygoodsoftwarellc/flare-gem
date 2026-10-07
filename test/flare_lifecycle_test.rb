@@ -40,6 +40,19 @@ class FlareLifecycleTest < Minitest::Test
     assert_includes stderr, "Telemetry flush error: boom"
   end
 
+  def test_force_flush_is_bounded_by_default
+    [{}, {timeout: nil}].each do |kwargs|
+      provider = FakeProvider.new
+      metrics = FakeMetricFlusher.new
+      Flare.instance_variable_set(:@metric_flusher, metrics)
+
+      Flare.stub(:tracer_provider_for_flush, provider) { Flare.force_flush(**kwargs) }
+
+      assert_in_delta Flare::Lifecycle::FLUSH_TIMEOUT, provider.timeout, 0.1
+      assert_in_delta Flare::Lifecycle::FLUSH_TIMEOUT, metrics.timeout, 0.1
+    end
+  end
+
   class FakeProvider
     attr_reader :timeout
 

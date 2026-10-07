@@ -6,11 +6,14 @@ require_relative "deadline"
 
 module Flare
   module Lifecycle
+    FLUSH_TIMEOUT = 5 # seconds, total across traces and metrics
+
     # Flush all trace processors and the separate aggregated metric pipeline
     # using one monotonic timeout budget. This is safe to call from lifecycle
-    # hooks for short-lived and fork-per-job workers.
-    def force_flush(timeout: nil)
-      deadline = Deadline.new(timeout)
+    # hooks for short-lived and fork-per-job workers. A nil timeout means the
+    # default, not unbounded: a hung endpoint must not stall the worker.
+    def force_flush(timeout: FLUSH_TIMEOUT)
+      deadline = Deadline.new(timeout || FLUSH_TIMEOUT)
       results = []
 
       results << tracer_provider_for_flush.force_flush(timeout: deadline.remaining)
