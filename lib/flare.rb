@@ -230,20 +230,7 @@ module Flare
       subscribe_to_notifications
     end
 
-    at_exit do
-      log "Shutting down..."
-      if configuration.spans_enabled && @span_processor
-        span_processor.force_flush
-        span_processor.shutdown
-        log "Span processor flushed and stopped"
-      end
-      if @trace_span_processor
-        @trace_span_processor.force_flush
-        @trace_span_processor.shutdown
-        log "Trace span processor flushed and stopped"
-      end
-      log "Shutdown complete"
-    end
+    install_shutdown_hook
 
     @otel_configured = true
   end
@@ -272,7 +259,7 @@ module Flare
     @rule_manager.start
     log "Rule manager started (poll=#{configuration.tracing_poll_interval}s)"
 
-    at_exit { @rule_manager&.stop }
+    install_shutdown_hook
   end
 
   def setup_tracing_components
@@ -357,7 +344,7 @@ module Flare
       @metric_flusher.start
       log "Metrics flusher started (interval=#{configuration.metrics_flush_interval}s)"
 
-      at_exit { @metric_flusher&.stop }
+      install_shutdown_hook
     else
       log "Metrics submission not configured (missing url or key)"
     end
