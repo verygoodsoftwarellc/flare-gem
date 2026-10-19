@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
   spec.summary = "Light up what's slowing you down"
   spec.description = "App monitoring for Rails. Captures requests, queries, jobs, cache, views, HTTP calls, mail, and exceptions with a waterfall visualization dashboard."
-  spec.homepage = "https://github.com/jnunemaker/flare"
+  spec.homepage = "https://github.com/verygoodsoftwarellc/flare-gem"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
@@ -18,7 +18,9 @@ Gem::Specification.new do |spec|
 
   spec.metadata["homepage_uri"] = "https://flare.am"
   spec.metadata["source_code_uri"] = spec.homepage
-  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/master/CHANGELOG.md"
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/releases"
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
+  spec.metadata["documentation_uri"] = "#{spec.homepage}#readme"
 
   spec.files = Dir.chdir(__dir__) do
     Dir["{app,config,exe,lib,public}/**/*", "CHANGELOG.md", "LICENSE.txt", "README.md"].reject { |f| File.directory?(f) }
