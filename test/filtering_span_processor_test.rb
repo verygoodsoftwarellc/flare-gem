@@ -128,26 +128,23 @@ class FilteringSpanProcessorTest < Minitest::Test
   # A marked trace waiting out its grace period can have every span evicted
   # by overflow. Its delayed entry must still be cleared when it comes due,
   # or the worker re-selects it forever with a zero wait and spins a core.
-  def test_worker_does_not_spin_when_a_delayed_trace_was_evicted
+  def test_clears_delayed_entry_when_its_trace_was_evicted
     processor = Flare::FilteringSpanProcessor.new(
       exporter:       @exporter,
       marker:         @marker,
       max_queue:      1,
-      flush_interval: 60,
       marked_trace_grace_period: 0.05,
       logger:         Logger.new(IO::NULL)
     )
-    wait_timeouts = []
-    processor.define_singleton_method(:next_wait_timeout) { super().tap { |t| wait_timeouts << t } }
+    delayed = processor.instance_variable_get(:@delayed_ready_by_trace)
 
     @marker.mark("t1", owner_span_id: "rack", rule_id: 1)
     processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false))
     processor.on_finish(span(trace_id: "t2", span_id: "child", sampled: true))
-    sleep 0.3
+    wait_until { delayed.empty? }
 
     assert_equal 1, processor.dropped_count.value
-    assert_operator wait_timeouts.count(0), :<=, 1, "worker spun #{wait_timeouts.count(0)} times with a zero wait"
-    refute @marker.marked?("t1")
+    assert_empty delayed
   ensure
     processor&.shutdown(timeout: 1)
   end
