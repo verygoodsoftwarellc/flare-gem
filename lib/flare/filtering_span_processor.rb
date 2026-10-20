@@ -304,13 +304,11 @@ module Flare
     end
 
     def mark_trace_ready(trace_id)
-      # Clear the delayed entry even when overflow already evicted the batch;
-      # a leftover entry makes next_wait_timeout return 0 forever.
-      @delayed_ready_by_trace.delete(trace_id)
       batch = @pending_by_trace.delete(trace_id)
       return unless batch
 
       @trace_order.delete(trace_id)
+      @delayed_ready_by_trace.delete(trace_id)
       @pending_count -= batch.length
       @ready_queue.concat(batch)
       @cond.signal
@@ -325,6 +323,9 @@ module Flare
       now = monotonic_now
       ready_trace_ids = @delayed_ready_by_trace.select { |_, ready_at| ready_at <= now }.keys
       ready_trace_ids.each do |trace_id|
+        # Overflow may have evicted the whole batch, so mark_trace_ready
+        # would not clear the entry and next_wait_timeout would return 0 forever.
+        @delayed_ready_by_trace.delete(trace_id)
         mark_trace_ready(trace_id)
         @marker.unmark(trace_id)
       end
