@@ -541,67 +541,74 @@ module Flare
       def prune(retention_hours:, max_spans:)
         cutoff = (Time.now - (retention_hours * 3600)).iso8601(6)
 
-        # Delete old properties first (for old spans and events)
-        execute(<<~SQL, [cutoff])
-          DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
-            SELECT id FROM flare_spans WHERE created_at < ?
-          )
-        SQL
+        # One transaction: a writer between statements could otherwise shift the
+        # newest-N window, leaving spans stripped of their properties or orphaned rows.
+        setup_database unless @setup
+        @mutex.synchronize do
+          connection.transaction(:immediate) do
+            # Delete old properties first (for old spans and events)
+            connection.execute(<<~SQL, [cutoff])
+              DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
+                SELECT id FROM flare_spans WHERE created_at < ?
+              )
+            SQL
 
-        execute(<<~SQL, [cutoff])
-          DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
-            SELECT id FROM flare_events WHERE span_id IN (
-              SELECT id FROM flare_spans WHERE created_at < ?
-            )
-          )
-        SQL
+            connection.execute(<<~SQL, [cutoff])
+              DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
+                SELECT id FROM flare_events WHERE span_id IN (
+                  SELECT id FROM flare_spans WHERE created_at < ?
+                )
+              )
+            SQL
 
-        # Delete old events
-        execute(<<~SQL, [cutoff])
-          DELETE FROM flare_events WHERE span_id IN (
-            SELECT id FROM flare_spans WHERE created_at < ?
-          )
-        SQL
+            # Delete old events
+            connection.execute(<<~SQL, [cutoff])
+              DELETE FROM flare_events WHERE span_id IN (
+                SELECT id FROM flare_spans WHERE created_at < ?
+              )
+            SQL
 
-        # Delete old spans
-        execute(<<~SQL, [cutoff])
-          DELETE FROM flare_spans WHERE created_at < ?
-        SQL
+            # Delete old spans
+            connection.execute(<<~SQL, [cutoff])
+              DELETE FROM flare_spans WHERE created_at < ?
+            SQL
 
-        # Also prune if over max_spans (keep newest)
-        execute(<<~SQL, [max_spans])
-          DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
-            SELECT id FROM flare_spans
-            ORDER BY created_at DESC
-            LIMIT -1 OFFSET ?
-          )
-        SQL
+            # Also prune if over max_spans (keep newest)
+            connection.execute(<<~SQL, [max_spans])
+              DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
+                SELECT id FROM flare_spans
+                ORDER BY created_at DESC
+                LIMIT -1 OFFSET ?
+              )
+            SQL
 
-        execute(<<~SQL, [max_spans])
-          DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
-            SELECT id FROM flare_events WHERE span_id IN (
-              SELECT id FROM flare_spans
-              ORDER BY created_at DESC
-              LIMIT -1 OFFSET ?
-            )
-          )
-        SQL
+            connection.execute(<<~SQL, [max_spans])
+              DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
+                SELECT id FROM flare_events WHERE span_id IN (
+                  SELECT id FROM flare_spans
+                  ORDER BY created_at DESC
+                  LIMIT -1 OFFSET ?
+                )
+              )
+            SQL
 
-        execute(<<~SQL, [max_spans])
-          DELETE FROM flare_events WHERE span_id IN (
-            SELECT id FROM flare_spans
-            ORDER BY created_at DESC
-            LIMIT -1 OFFSET ?
-          )
-        SQL
+            connection.execute(<<~SQL, [max_spans])
+              DELETE FROM flare_events WHERE span_id IN (
+                SELECT id FROM flare_spans
+                ORDER BY created_at DESC
+                LIMIT -1 OFFSET ?
+              )
+            SQL
 
-        execute(<<~SQL, [max_spans])
-          DELETE FROM flare_spans WHERE id IN (
-            SELECT id FROM flare_spans
-            ORDER BY created_at DESC
-            LIMIT -1 OFFSET ?
-          )
-        SQL
+            connection.execute(<<~SQL, [max_spans])
+              DELETE FROM flare_spans WHERE id IN (
+                SELECT id FROM flare_spans
+                ORDER BY created_at DESC
+                LIMIT -1 OFFSET ?
+              )
+            SQL
+          end
+        end
       end
 
       def clear_all
