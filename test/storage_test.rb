@@ -51,6 +51,7 @@ class StorageTest < Minitest::Test
   # picking up a connection another test left open.
   def with_storage
     Thread.new do
+      Thread.current.report_on_exception = false
       Dir.mktmpdir do |dir|
         path = File.join(dir, "flare.sqlite3")
         storage = Flare::Storage::SQLite.new(path)
