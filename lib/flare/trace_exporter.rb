@@ -92,14 +92,13 @@ module Flare
     private
 
     # Errors are contained per trace so one bad trace or one transport
-    # error doesn't drop the rest of the batch. Deadline errors still
-    # propagate so export returns TIMEOUT.
+    # error doesn't drop the rest of the batch.
     def ship(blob, deadline:)
       return FAILURE if blob.nil?
 
       put(gzip(JSON.generate(blob.to_h)), deadline: deadline)
     rescue StandardError => e
-      raise if deadline.expired? || e.is_a?(HttpTransport::DeadlineExceeded)
+      return TIMEOUT if deadline.expired? || e.is_a?(HttpTransport::DeadlineExceeded)
 
       @exception_count.increment
       @logger.warn("[Flare::TraceExporter] trace export raised: #{e.class}: #{e.message}")

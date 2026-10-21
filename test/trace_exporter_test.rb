@@ -126,7 +126,7 @@ class TraceExporterTest < Minitest::Test
 
   def test_transport_error_on_one_trace_still_ships_the_rest_of_the_batch
     @pool.replace([upload("u1"), upload("u2")])
-    @transport.raise_on_put << Net::ReadTimeout.new
+    @transport.responses_for(:put) << Net::ReadTimeout.new
     @transport.responses_for(:post) << http(202)
 
     result = @exporter.export([span("a", trace: "t1"), span("b", trace: "t2")])
@@ -204,13 +204,8 @@ class TraceExporterTest < Minitest::Test
     end
 
     def put(url, body, headers, timeout: nil)
-      result = record(:put, url, body, headers, timeout)
-      error = raise_on_put.shift
-      raise error if error
-      result
+      record(:put, url, body, headers, timeout)
     end
-
-    def raise_on_put = @raise_on_put ||= []
 
     def post(url, body, headers, timeout: nil)
       record(:post, url, body, headers, timeout)
@@ -223,7 +218,10 @@ class TraceExporterTest < Minitest::Test
 
     def record(method, url, body, headers, timeout)
       @calls[method] << { url: url, body: body, headers: headers, timeout: timeout }
-      @responses[method].shift || Flare::HttpTransport::Response.new(code: "200", body: "")
+      response = @responses[method].shift || Flare::HttpTransport::Response.new(code: "200", body: "")
+      raise response if response.is_a?(Exception)
+
+      response
     end
   end
 end
