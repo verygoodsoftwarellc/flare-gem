@@ -170,13 +170,14 @@ class SQLiteExporterTest < Minitest::Test
   end
 
   def test_invalid_utf8_attribute_does_not_fail_the_batch
-    bad = mock_span_data(name: "GET /api", span_id: "bad", attributes: { "user_agent.original" => "curl\xFF".b })
+    bad = mock_span_data(name: "GET /api\xFF".b, span_id: "bad", attributes: { "user_agent.original" => "curl\xFF".b, "app.\xFF".b => 1 })
     good = mock_span_data(name: "GET /", span_id: "good", attributes: { "http.target" => "/" })
 
     assert_equal Flare::SQLiteExporter::SUCCESS, @exporter.export([bad, good])
 
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    assert_equal ["GET /api", "GET /"], db.execute("SELECT name FROM flare_spans ORDER BY id").map { |r| r["name"] }
+    assert_equal ["GET /api\uFFFD", "GET /"], db.execute("SELECT name FROM flare_spans ORDER BY id").map { |r| r["name"] }
+    assert_equal 1, db.execute("SELECT count(*) AS n FROM flare_properties WHERE key = 'app.\uFFFD'").first["n"]
     ua = db.execute("SELECT value FROM flare_properties WHERE key = 'user_agent.original'").first["value"]
     assert_equal "curl\uFFFD", JSON.parse(ua)
   end

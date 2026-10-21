@@ -12,7 +12,7 @@ module Flare
 
         value.dup.force_encoding(Encoding::UTF_8).scrub
       when Array then value.map { |v| scrub(v) }
-      when Hash then value.transform_values { |v| scrub(v) }
+      when Hash then value.to_h { |k, v| [scrub(k), scrub(v)] }
       else value
       end
     end
