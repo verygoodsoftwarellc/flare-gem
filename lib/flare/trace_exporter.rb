@@ -166,7 +166,7 @@ module Flare
     end
 
     # Identifies the client on the Flare-API notify POST. The presigned R2
-    # PUT in #ship deliberately uses PUT_HEADERS only -- adding these there
+    # PUT in #put deliberately uses PUT_HEADERS only -- adding these there
     # could invalidate the signed-header set.
     def notify_headers
       ClientHeaders.to_h.merge(
