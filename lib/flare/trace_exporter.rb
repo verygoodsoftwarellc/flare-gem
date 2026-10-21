@@ -97,13 +97,16 @@ module Flare
       return FAILURE if blob.nil?
       return TIMEOUT if deadline.expired?
 
+      # Encode before checkout so a trace that can't be encoded doesn't use
+      # up a URL, but skip the work when there's no URL to upload to.
+      body ||= encode(blob) unless @pool.empty?
       entry = @pool.checkout
       if entry.nil?
         @pool_empty_count.increment
         return FAILURE
       end
 
-      body ||= gzip(JSON.generate(blob.to_h))
+      body ||= encode(blob)
       response = transport_request(:put, entry[:put_url], body, PUT_HEADERS, timeout: deadline.remaining)
       return TIMEOUT if deadline.expired?
 
@@ -177,6 +180,10 @@ module Flare
       @put_failure_count.increment
       @logger.warn("[Flare::TraceExporter] PUT failed: HTTP #{response.code}")
       FAILURE
+    end
+
+    def encode(blob)
+      gzip(JSON.generate(blob.to_h))
     end
 
     def gzip(body)
