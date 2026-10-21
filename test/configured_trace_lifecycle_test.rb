@@ -114,7 +114,9 @@ class ConfiguredTraceLifecycleTest < Minitest::Test
         tracer.in_span("sql.active_record", attributes: { "db.system" => "sqlite" }) { nil }
       end
 
-      result = Flare.force_flush(timeout: 1)
+      # Default 5s budget: the cold first flush is ~10ms but stalls for
+      # hundreds of ms on busy CI runners, and 1s flaked.
+      result = Flare.force_flush
       abort "flush failed: #{result}" unless result == OpenTelemetry::SDK::Trace::Export::SUCCESS
 
       database = SQLite3::Database.new(database_path)
