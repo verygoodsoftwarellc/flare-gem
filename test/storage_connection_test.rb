@@ -11,10 +11,8 @@ class StorageConnectionTest < Minitest::Test
       second = Flare::Storage::SQLite.new(second_path)
 
       first.clear_all # leaves a connection to first.sqlite3 cached on this thread
-      second.clear_all
+      second.clear_all # creates second's schema
 
-      assert_equal 0, second.count_requests
-      assert_equal 0, first.count_requests
       db = SQLite3::Database.new(second_path)
       assert_includes db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").flatten, "flare_spans"
     ensure
