@@ -39,14 +39,14 @@ module Flare
 
     def to_h
       root = find_root
-      {
+      UTF8.scrub({
         "trace_id"      => hexify(@trace_id),
         "trace_rule_id" => rule_id_from_spans,
         "root_name"     => root_name(root),
         "started_at"    => iso(root&.start_timestamp),
         "duration_ms"   => duration_ms(root),
         "spans"         => @spans.map { |s| span_to_h(s) }
-      }
+      })
     end
 
     private
@@ -86,17 +86,17 @@ module Flare
     end
 
     def root_name(root)
-      UTF8.scrub(root&.name&.to_s&.slice(0, ROOT_NAME_LIMIT))
+      root&.name&.to_s&.slice(0, ROOT_NAME_LIMIT)
     end
 
     def span_to_h(span)
       {
         "id"          => hexify(span.span_id),
         "parent_id"   => root?(span) ? nil : hexify(span.parent_span_id),
-        "name"        => UTF8.scrub(span.name),
+        "name"        => span.name,
         "started_at"  => iso(span.start_timestamp),
         "duration_ms" => duration_ms(span),
-        "attributes"  => UTF8.scrub(span.attributes || {})
+        "attributes"  => span.attributes || {}
       }
     end
 

@@ -8,7 +8,7 @@ module Flare
     def self.scrub(value)
       case value
       when String
-        return value if value.valid_encoding? && value.encoding != Encoding::BINARY
+        return value if value.ascii_only? || (value.valid_encoding? && value.encoding != Encoding::BINARY)
 
         value.dup.force_encoding(Encoding::UTF_8).scrub
       when Array then value.map { |v| scrub(v) }
