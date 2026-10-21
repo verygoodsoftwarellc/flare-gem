@@ -2,7 +2,6 @@
 
 require_relative "test_helper"
 require "flare/storage/sqlite"
-require "tmpdir"
 
 class StorageTest < Minitest::Test
   def test_sqlite_implements_every_base_method_with_the_same_parameters
@@ -52,7 +51,7 @@ class StorageTest < Minitest::Test
     Dir.mktmpdir do |dir|
       path = File.join(dir, "flare.sqlite3")
       storage = Flare::Storage::SQLite.new(path)
-      storage.clear_all # creates the schema
+      storage.send(:setup_database)
       yield storage, path
     ensure
       storage&.send(:close_connection)

@@ -545,15 +545,15 @@ module Flare
         # newest-N window, leaving spans stripped of their properties or orphaned rows.
         setup_database unless @setup
         @mutex.synchronize do
-          connection.transaction(:immediate) do
+          connection.transaction(:immediate) do |db|
             # Delete old properties first (for old spans and events)
-            connection.execute(<<~SQL, [cutoff])
+            db.execute(<<~SQL, [cutoff])
               DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
                 SELECT id FROM flare_spans WHERE created_at < ?
               )
             SQL
 
-            connection.execute(<<~SQL, [cutoff])
+            db.execute(<<~SQL, [cutoff])
               DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
                 SELECT id FROM flare_events WHERE span_id IN (
                   SELECT id FROM flare_spans WHERE created_at < ?
@@ -562,19 +562,19 @@ module Flare
             SQL
 
             # Delete old events
-            connection.execute(<<~SQL, [cutoff])
+            db.execute(<<~SQL, [cutoff])
               DELETE FROM flare_events WHERE span_id IN (
                 SELECT id FROM flare_spans WHERE created_at < ?
               )
             SQL
 
             # Delete old spans
-            connection.execute(<<~SQL, [cutoff])
+            db.execute(<<~SQL, [cutoff])
               DELETE FROM flare_spans WHERE created_at < ?
             SQL
 
             # Also prune if over max_spans (keep newest)
-            connection.execute(<<~SQL, [max_spans])
+            db.execute(<<~SQL, [max_spans])
               DELETE FROM flare_properties WHERE owner_type = 'Flare::Span' AND owner_id IN (
                 SELECT id FROM flare_spans
                 ORDER BY created_at DESC
@@ -582,7 +582,7 @@ module Flare
               )
             SQL
 
-            connection.execute(<<~SQL, [max_spans])
+            db.execute(<<~SQL, [max_spans])
               DELETE FROM flare_properties WHERE owner_type = 'Flare::Event' AND owner_id IN (
                 SELECT id FROM flare_events WHERE span_id IN (
                   SELECT id FROM flare_spans
@@ -592,7 +592,7 @@ module Flare
               )
             SQL
 
-            connection.execute(<<~SQL, [max_spans])
+            db.execute(<<~SQL, [max_spans])
               DELETE FROM flare_events WHERE span_id IN (
                 SELECT id FROM flare_spans
                 ORDER BY created_at DESC
@@ -600,7 +600,7 @@ module Flare
               )
             SQL
 
-            connection.execute(<<~SQL, [max_spans])
+            db.execute(<<~SQL, [max_spans])
               DELETE FROM flare_spans WHERE id IN (
                 SELECT id FROM flare_spans
                 ORDER BY created_at DESC
