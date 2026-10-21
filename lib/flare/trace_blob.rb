@@ -2,6 +2,8 @@
 
 require "time"
 
+require_relative "utf8"
+
 module Flare
   # Value object that turns a group of OTel span_data for a single trace
   # into the Flare-JSON wire format the server expects:
@@ -37,14 +39,14 @@ module Flare
 
     def to_h
       root = find_root
-      {
+      UTF8.scrub({
         "trace_id"      => hexify(@trace_id),
         "trace_rule_id" => rule_id_from_spans,
         "root_name"     => root_name(root),
         "started_at"    => iso(root&.start_timestamp),
         "duration_ms"   => duration_ms(root),
         "spans"         => @spans.map { |s| span_to_h(s) }
-      }
+      })
     end
 
     private

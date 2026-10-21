@@ -4,6 +4,7 @@ require "sqlite3"
 require "json"
 
 require_relative "deadline"
+require_relative "utf8"
 
 module Flare
   class SQLiteExporter
@@ -137,7 +138,7 @@ module Flare
       SQL
 
       values = [
-        span_data.name,
+        UTF8.scrub(span_data.name),
         span_data.kind.to_s,
         span_data.hex_span_id,
         span_data.hex_trace_id,
@@ -170,7 +171,7 @@ module Flare
         VALUES (?, ?, ?, ?)
       SQL
 
-      connection.execute(sql, [span_record_id, span_event.name, timestamp, now])
+      connection.execute(sql, [span_record_id, UTF8.scrub(span_event.name), timestamp, now])
       event_record_id = connection.last_insert_row_id
       create_properties("Flare::Event", event_record_id, span_event.attributes)
     end
@@ -189,8 +190,8 @@ module Flare
         next if value.nil?
 
         value_type = determine_value_type(value)
-        serialized_value = JSON.generate(value)
-        connection.execute(sql, [key, serialized_value, value_type, owner_type, owner_id, now, now])
+        serialized_value = JSON.generate(UTF8.scrub(value))
+        connection.execute(sql, [UTF8.scrub(key), serialized_value, value_type, owner_type, owner_id, now, now])
       end
     end
 

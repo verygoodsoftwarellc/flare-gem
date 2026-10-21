@@ -87,6 +87,25 @@ class TraceBlobTest < Minitest::Test
     assert_equal 100, h["duration_ms"]
   end
 
+  def test_invalid_utf8_is_replaced_so_the_blob_serializes
+    spans = [
+      span("GET /caf\xC3\xA9".b, id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 10_000_000,
+           attrs: { "user_agent.original" => "curl\xFF".b, "db.statement" => "SELECT '\xC3'", "tags" => ["ok", "\xFF".b], "app.\xFF".b => 1 },
+           kind: :server)
+    ]
+
+    json = JSON.generate(Flare::TraceBlob.build(trace_id: ("\x01".b * 16), spans: spans).to_h)
+    h = JSON.parse(json)
+    attrs = h["spans"].first["attributes"]
+
+    assert_equal "GET /caf\u00e9", h["root_name"]
+    assert_equal "GET /caf\u00e9", h["spans"].first["name"]
+    assert_equal "curl\uFFFD", attrs["user_agent.original"]
+    assert_equal "SELECT '\uFFFD'", attrs["db.statement"]
+    assert_equal ["ok", "\uFFFD"], attrs["tags"]
+    assert_equal 1, attrs["app.\uFFFD"]
+  end
+
   def test_returns_nil_when_no_spans
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: [])
     assert_nil Flare::TraceBlob.build(trace_id: "x", spans: nil)
