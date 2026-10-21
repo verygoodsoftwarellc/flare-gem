@@ -4,6 +4,7 @@ require "sqlite3"
 require "json"
 
 require_relative "deadline"
+require_relative "utf8"
 
 module Flare
   class SQLiteExporter
@@ -189,7 +190,7 @@ module Flare
         next if value.nil?
 
         value_type = determine_value_type(value)
-        serialized_value = JSON.generate(value)
+        serialized_value = JSON.generate(UTF8.scrub(value))
         connection.execute(sql, [key, serialized_value, value_type, owner_type, owner_id, now, now])
       end
     end
