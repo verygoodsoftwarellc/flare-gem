@@ -91,8 +91,22 @@ module Flare
 
     private
 
-    def ship(blob, deadline:, retried: false)
+    # Errors are contained per trace so one bad trace or one transport
+    # error doesn't drop the rest of the batch. Deadline errors still
+    # propagate so export returns TIMEOUT.
+    def ship(blob, deadline:)
       return FAILURE if blob.nil?
+
+      put(gzip(JSON.generate(blob.to_h)), deadline: deadline)
+    rescue StandardError => e
+      raise if deadline.expired? || e.is_a?(HttpTransport::DeadlineExceeded)
+
+      @exception_count.increment
+      @logger.warn("[Flare::TraceExporter] trace export raised: #{e.class}: #{e.message}")
+      FAILURE
+    end
+
+    def put(body, deadline:, retried: false)
       return TIMEOUT if deadline.expired?
 
       entry = @pool.checkout
@@ -101,7 +115,6 @@ module Flare
         return FAILURE
       end
 
-      body = gzip(JSON.generate(blob.to_h))
       response = transport_request(:put, entry[:put_url], body, PUT_HEADERS, timeout: deadline.remaining)
       return TIMEOUT if deadline.expired?
 
@@ -110,7 +123,7 @@ module Flare
         notify(entry[:key], deadline: deadline)
       when "403"
         # Presigned URL probably expired; try once more with the next one.
-        retried ? record_put_failure(response) : ship(blob, deadline: deadline, retried: true)
+        retried ? record_put_failure(response) : put(body, deadline: deadline, retried: true)
       else
         record_put_failure(response)
       end

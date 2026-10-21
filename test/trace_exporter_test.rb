@@ -124,6 +124,33 @@ class TraceExporterTest < Minitest::Test
     assert_equal 1, @exporter.notify_failure_count.value
   end
 
+  def test_transport_error_on_one_trace_still_ships_the_rest_of_the_batch
+    @pool.replace([upload("u1"), upload("u2")])
+    @transport.raise_on_put << Net::ReadTimeout.new
+    @transport.responses_for(:post) << http(202)
+
+    result = @exporter.export([span("a", trace: "t1"), span("b", trace: "t2")])
+
+    assert_equal FAILURE, result
+    assert_equal ["https://r2/put/u1", "https://r2/put/u2"], @transport.calls(:put).map { |c| c[:url] }
+    assert_equal 1, @transport.calls(:post).length
+    assert_equal 1, @exporter.exception_count.value
+  end
+
+  def test_unserializable_trace_skips_without_using_an_upload_url
+    @pool.replace([upload("u1")])
+    @transport.responses_for(:post) << http(202)
+    bad = span("a", trace: "t1")
+    bad.attributes = { "ratio" => Float::NAN }
+
+    result = @exporter.export([bad, span("b", trace: "t2")])
+
+    assert_equal FAILURE, result
+    assert_equal ["https://r2/put/u1"], @transport.calls(:put).map { |c| c[:url] }
+    assert_equal 1, @transport.calls(:post).length
+    assert_equal 1, @exporter.exception_count.value
+  end
+
   def test_handles_no_spans_as_success
     assert_equal SUCCESS, @exporter.export([])
   end
@@ -177,8 +204,13 @@ class TraceExporterTest < Minitest::Test
     end
 
     def put(url, body, headers, timeout: nil)
-      record(:put, url, body, headers, timeout)
+      result = record(:put, url, body, headers, timeout)
+      error = raise_on_put.shift
+      raise error if error
+      result
     end
+
+    def raise_on_put = @raise_on_put ||= []
 
     def post(url, body, headers, timeout: nil)
       record(:post, url, body, headers, timeout)
