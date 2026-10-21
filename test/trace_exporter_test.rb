@@ -137,8 +137,8 @@ class TraceExporterTest < Minitest::Test
     assert_equal 1, @exporter.exception_count.value
   end
 
-  def test_unserializable_trace_skips_without_using_an_upload_url
-    @pool.replace([upload("u1")])
+  def test_unserializable_trace_does_not_stop_the_rest_of_the_batch
+    @pool.replace([upload("u1"), upload("u2")])
     @transport.responses_for(:post) << http(202)
     bad = span("a", trace: "t1")
     bad.attributes = { "ratio" => Float::NAN }
@@ -146,7 +146,7 @@ class TraceExporterTest < Minitest::Test
     result = @exporter.export([bad, span("b", trace: "t2")])
 
     assert_equal FAILURE, result
-    assert_equal ["https://r2/put/u1"], @transport.calls(:put).map { |c| c[:url] }
+    assert_equal ["https://r2/put/u2"], @transport.calls(:put).map { |c| c[:url] }
     assert_equal 1, @transport.calls(:post).length
     assert_equal 1, @exporter.exception_count.value
   end

@@ -93,19 +93,8 @@ module Flare
 
     # Errors are contained per trace so one bad trace or one transport
     # error doesn't drop the rest of the batch.
-    def ship(blob, deadline:)
+    def ship(blob, deadline:, body: nil, retried: false)
       return FAILURE if blob.nil?
-
-      put(gzip(JSON.generate(blob.to_h)), deadline: deadline)
-    rescue StandardError => e
-      return TIMEOUT if deadline.expired? || e.is_a?(HttpTransport::DeadlineExceeded)
-
-      @exception_count.increment
-      @logger.warn("[Flare::TraceExporter] trace export raised: #{e.class}: #{e.message}")
-      FAILURE
-    end
-
-    def put(body, deadline:, retried: false)
       return TIMEOUT if deadline.expired?
 
       entry = @pool.checkout
@@ -114,6 +103,7 @@ module Flare
         return FAILURE
       end
 
+      body ||= gzip(JSON.generate(blob.to_h))
       response = transport_request(:put, entry[:put_url], body, PUT_HEADERS, timeout: deadline.remaining)
       return TIMEOUT if deadline.expired?
 
@@ -122,10 +112,16 @@ module Flare
         notify(entry[:key], deadline: deadline)
       when "403"
         # Presigned URL probably expired; try once more with the next one.
-        retried ? record_put_failure(response) : put(body, deadline: deadline, retried: true)
+        retried ? record_put_failure(response) : ship(blob, deadline: deadline, body: body, retried: true)
       else
         record_put_failure(response)
       end
+    rescue StandardError => e
+      return TIMEOUT if deadline.expired? || e.is_a?(HttpTransport::DeadlineExceeded)
+
+      @exception_count.increment
+      @logger.warn("[Flare::TraceExporter] trace export raised: #{e.class}: #{e.message}")
+      FAILURE
     end
 
     def notify(key, deadline:)
@@ -166,7 +162,7 @@ module Flare
     end
 
     # Identifies the client on the Flare-API notify POST. The presigned R2
-    # PUT in #put deliberately uses PUT_HEADERS only -- adding these there
+    # PUT in #ship deliberately uses PUT_HEADERS only -- adding these there
     # could invalidate the signed-header set.
     def notify_headers
       ClientHeaders.to_h.merge(
