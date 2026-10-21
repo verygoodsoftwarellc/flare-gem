@@ -47,15 +47,19 @@ class StorageTest < Minitest::Test
 
   private
 
+  # Storage caches its connection per thread, so use a fresh thread to avoid
+  # picking up a connection another test left open.
   def with_storage
-    Dir.mktmpdir do |dir|
-      path = File.join(dir, "flare.sqlite3")
-      storage = Flare::Storage::SQLite.new(path)
-      storage.send(:setup_database)
-      yield storage, path
-    ensure
-      storage&.send(:close_connection)
-    end
+    Thread.new do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "flare.sqlite3")
+        storage = Flare::Storage::SQLite.new(path)
+        storage.send(:setup_database)
+        yield storage, path
+      ensure
+        storage&.send(:close_connection)
+      end
+    end.join
   end
 
   def insert_span(path, name, created_at)
