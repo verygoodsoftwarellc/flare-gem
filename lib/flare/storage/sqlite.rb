@@ -687,8 +687,14 @@ module Flare
         db.execute("PRAGMA cache_size=2000")
       end
 
+      # Keyed by path, like SQLiteExporter, so storages for different files on
+      # the same thread don't share a connection.
+      def connection_key
+        :"flare_storage_db_#{@database_path.hash}"
+      end
+
       def connection
-        Thread.current[:flare_storage_db] ||= begin
+        Thread.current[connection_key] ||= begin
           dir = File.dirname(@database_path)
           FileUtils.mkdir_p(dir) unless File.directory?(dir)
           db = ::SQLite3::Database.new(@database_path, results_as_hash: true)
@@ -698,9 +704,10 @@ module Flare
       end
 
       def close_connection
-        if db = Thread.current[:flare_storage_db]
+        key = connection_key
+        if db = Thread.current[key]
           db.close rescue nil
-          Thread.current[:flare_storage_db] = nil
+          Thread.current[key] = nil
         end
       end
 
