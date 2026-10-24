@@ -181,7 +181,13 @@ module Flare
     require "opentelemetry-instrumentation-rack"
     require "opentelemetry-instrumentation-net_http"
     require "opentelemetry-instrumentation-active_support"
-    require "opentelemetry/instrumentation/active_support/span_subscriber"
+    begin
+      # Internal OTel path (it defines ActiveSupport.subscribe). Installing the
+      # ActiveSupport instrumentation also loads it, so a moved file only
+      # matters if subscribe is missing below.
+      require "opentelemetry/instrumentation/active_support/span_subscriber"
+    rescue LoadError
+    end
     require "opentelemetry-instrumentation-action_pack" if defined?(ActionController)
     require "opentelemetry-instrumentation-action_view" if defined?(ActionView)
     require "opentelemetry-instrumentation-active_job" if defined?(ActiveJob)
@@ -227,7 +233,11 @@ module Flare
     # Required for both spans (detailed traces) and metrics (aggregated counters)
     # because DB, cache, and mailer data flows through ActiveSupport notifications.
     if configuration.spans_enabled || configuration.metrics_enabled
-      subscribe_to_notifications
+      if OpenTelemetry::Instrumentation::ActiveSupport.respond_to?(:subscribe)
+        subscribe_to_notifications
+      else
+        warn "[Flare] OpenTelemetry::Instrumentation::ActiveSupport.subscribe not found. SQL, cache, mailer and custom notification spans are disabled. Check your opentelemetry-instrumentation-active_support version."
+      end
     end
 
     install_shutdown_hook

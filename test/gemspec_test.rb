@@ -12,4 +12,15 @@ class GemspecTest < Minitest::Test
       assert spec.metadata[key]&.start_with?(spec.metadata["source_code_uri"]), "#{key} should live under source_code_uri"
     end
   end
+
+  def test_opentelemetry_dependencies_have_floors_and_ceilings
+    spec = Gem::Specification.load(File.expand_path("../flare.gemspec", __dir__))
+    otel = spec.runtime_dependencies.select { |dep| dep.name.start_with?("opentelemetry-") }
+
+    refute_empty otel
+    otel.each do |dep|
+      refute dep.requirement.satisfied_by?(Gem::Version.new("0.0.1")), "#{dep.name} needs a floor"
+      refute dep.requirement.satisfied_by?(Gem::Version.new("2.0")), "#{dep.name} needs a ceiling"
+    end
+  end
 end
