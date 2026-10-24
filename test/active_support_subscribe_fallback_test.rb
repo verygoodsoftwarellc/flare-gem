@@ -8,18 +8,17 @@ class ActiveSupportSubscribeFallbackTest < Minitest::Test
   # Flare requires an internal OTel file for ActiveSupport.subscribe. If a
   # future release moves it, boot should warn and keep tracing, not raise.
   def test_boots_and_traces_when_the_internal_span_subscriber_file_is_missing
-    directory = Dir.mktmpdir
-    stdout, stderr, status = Open3.capture3(
-      { "OTEL_RUBY_INSTRUMENTATION_ACTIVESUPPORT_ENABLED" => "false" },
-      RbConfig.ruby, "-Ilib", "-e", script, File.join(directory, "flare.sqlite3"),
-      chdir: File.expand_path("..", __dir__)
-    )
+    stdout, stderr, status = Dir.mktmpdir do |directory|
+      Open3.capture3(
+        { "OTEL_RUBY_INSTRUMENTATION_ACTIVESUPPORT_ENABLED" => "false" },
+        RbConfig.ruby, "-Ilib", "-e", script, File.join(directory, "flare.sqlite3"),
+        chdir: File.expand_path("..", __dir__)
+      )
+    end
 
     assert status.success?, stderr
     assert_includes stderr, "[Flare] OpenTelemetry::Instrumentation::ActiveSupport.subscribe not found"
     assert_equal "GET /users", stdout.lines.last.strip
-  ensure
-    FileUtils.remove_entry(directory) if directory && File.exist?(directory)
   end
 
   private
