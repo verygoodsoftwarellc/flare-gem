@@ -439,6 +439,28 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET /api/v1/users/search", key.target
   end
 
+  def test_on_finish_contains_errors_and_warns_once
+    storage = Object.new
+    storage.define_singleton_method(:increment) { |*_args, **_opts| raise ArgumentError, "boom" }
+    processor = Flare::MetricSpanProcessor.new(storage: storage, http_metrics_config: @http_config)
+    span = MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 200, "code.namespace" => "UsersController" })
+
+    _out, err = capture_io { 2.times { processor.on_finish(span) } }
+
+    assert_equal 1, err.scan("ArgumentError: boom").length
+
+    reader, writer = IO.pipe
+    pid = fork do
+      reader.close
+      $stderr = writer
+      processor.on_finish(span)
+      exit!(0)
+    end
+    writer.close
+    Process.wait(pid)
+    assert_includes reader.read, "on_finish failed", "a forked worker should warn again"
+  end
+
   # Cache metric tests
 
   def test_cache_read_hit_creates_metric

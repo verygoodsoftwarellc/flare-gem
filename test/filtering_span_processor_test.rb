@@ -21,6 +21,15 @@ class FilteringSpanProcessorTest < Minitest::Test
     @processor.shutdown(timeout: 1)
   end
 
+  def test_on_finish_contains_errors_and_counts_them
+    broken = Object.new
+    broken.define_singleton_method(:context) { raise ArgumentError, "boom" }
+
+    @processor.on_finish(broken)
+
+    assert_equal 1, @processor.exception_count.value
+  end
+
   def test_enqueues_sampled_spans
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: true, parent_span_id: nil))
     @processor.force_flush
