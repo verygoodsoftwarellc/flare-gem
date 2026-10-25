@@ -270,6 +270,18 @@ class IntegrationTest < Minitest::Test
     span_id
   end
 
+  def test_rack_untraces_only_flare_dashboard_and_asset_paths
+    untraced = OpenTelemetry::Instrumentation::Rack::Instrumentation.instance.config[:untraced_requests]
+
+    %w[/flare /flare/ /flare/requests /flare-assets/flare.css].each do |path|
+      assert untraced.call(Rack::MockRequest.env_for(path)), "expected #{path} to be untraced"
+    end
+
+    %w[/flares /flare-ups /flareon/1 /flare-assets-admin /users].each do |path|
+      refute untraced.call(Rack::MockRequest.env_for(path)), "expected #{path} to be traced"
+    end
+  end
+
   def test_requests_index_empty
     get "/flare/requests"
 
