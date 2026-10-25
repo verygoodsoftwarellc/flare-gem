@@ -61,7 +61,7 @@ module Flare
       return if @on_finish_error_logged
 
       @on_finish_error_logged = true
-      Flare.logger.warn("[Flare::MetricSpanProcessor] on_finish failed: #{e.class}: #{e.message}")
+      warn "[Flare::MetricSpanProcessor] on_finish failed: #{e.class}: #{e.message}"
     end
 
     def force_flush(timeout: nil)
