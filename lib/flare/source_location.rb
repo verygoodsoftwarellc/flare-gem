@@ -16,10 +16,12 @@ module Flare
       /lib\/active_support/,
       /lib\/action_/,
       /opentelemetry/,
-      /flare/,
       /<internal:/,
       /\/bin\//,
     ].freeze
+
+    # Frames from this gem itself (for path: and git: installs outside /gems/).
+    GEM_ROOT = "#{File.expand_path("../..", __dir__)}/"
 
     module_function
 
@@ -39,36 +41,35 @@ module Flare
     # Find multiple app source locations from the current backtrace
     # Returns an array of cleaned backtrace lines (up to MAX_TRACE_LINES)
     def find_trace
-      backtrace = caller(2, 100)
-      return [] unless backtrace
-
-      # Filter to only app code lines
-      app_lines = backtrace.select { |line| app_code?(line) }
-      return [] if app_lines.empty?
-
-      # Clean and format each line, limit to MAX_TRACE_LINES
-      app_lines.first(MAX_TRACE_LINES).map { |line| clean_backtrace_line(line) }
+      app_lines(caller(2, 100)).map { |line| clean_backtrace_line(line) }
     end
 
-    # Add source location attributes to a hash (for span attributes)
+    # Add source location attributes to a hash (for span attributes).
+    # Captures the backtrace once for both the location and the trace.
     def add_to_attributes(attrs)
-      location = find
+      lines = app_lines(caller(1, 100))
+      location = lines.first && parse_backtrace_line(lines.first)
       return attrs unless location
 
       attrs["code.filepath"] = location[:filepath]
       attrs["code.lineno"] = location[:lineno]
       attrs["code.function"] = location[:function] if location[:function]
-
-      # Add full trace as a single string attribute
-      trace = find_trace
-      attrs["code.stacktrace"] = trace.join("\n") if trace.any?
+      attrs["code.stacktrace"] = lines.map { |line| clean_backtrace_line(line) }.join("\n")
 
       attrs
+    end
+
+    # The first MAX_TRACE_LINES app code lines of a backtrace.
+    def app_lines(backtrace)
+      return [] unless backtrace
+
+      backtrace.select { |line| app_code?(line) }.first(MAX_TRACE_LINES)
     end
 
     def app_code?(line)
       # Must contain /app/ (Rails convention) and not match ignore patterns
       return false unless line.include?("/app/")
+      return false if line.start_with?(GEM_ROOT)
 
       IGNORE_PATTERNS.none? { |pattern| line.match?(pattern) }
     end
