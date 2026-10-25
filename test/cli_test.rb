@@ -480,36 +480,19 @@ class SetupCommandCallbackTest < Minitest::Test
     assert_equal "good-code", wait_for_code { send_request("/callback?state=#{STATE}&code=good-code") }
   end
 
-  def test_keeps_waiting_after_callback_with_wrong_state
-    code = wait_for_code do
-      send_request("/callback?state=wrong&code=other")
-      send_request("/callback?state=#{STATE}&code=good-code")
+  {
+    wrong_state: "/callback?state=wrong&code=other",
+    error_without_matching_state: "/callback?error=access_denied",
+    missing_code: "/callback?state=#{STATE}",
+    unparseable_path: "/callback?a=b|c"
+  }.each do |name, path|
+    define_method("test_keeps_waiting_after_#{name}") do
+      code = wait_for_code do
+        send_request(path)
+        send_request("/callback?state=#{STATE}&code=good-code")
+      end
+      assert_equal "good-code", code
     end
-    assert_equal "good-code", code
-  end
-
-  def test_keeps_waiting_after_error_callback_without_matching_state
-    code = wait_for_code do
-      send_request("/callback?error=access_denied")
-      send_request("/callback?state=#{STATE}&code=good-code")
-    end
-    assert_equal "good-code", code
-  end
-
-  def test_keeps_waiting_after_callback_without_code
-    code = wait_for_code do
-      send_request("/callback?state=#{STATE}")
-      send_request("/callback?state=#{STATE}&code=good-code")
-    end
-    assert_equal "good-code", code
-  end
-
-  def test_keeps_waiting_after_unparseable_callback_path
-    code = wait_for_code do
-      send_request("/callback?a=b|c")
-      send_request("/callback?state=#{STATE}&code=good-code")
-    end
-    assert_equal "good-code", code
   end
 
   def test_keeps_waiting_after_connection_that_sends_nothing
@@ -526,10 +509,10 @@ class SetupCommandCallbackTest < Minitest::Test
   end
 
   def test_stops_on_error_callback_with_matching_state
-    code = wait_for_code do
-      send_request("/callback?state=#{STATE}&error=access_denied")
+    error = assert_raises(Flare::SetupCommand::AuthorizationDenied) do
+      wait_for_code { send_request("/callback?state=#{STATE}&error=access_denied") }
     end
-    assert_nil code
+    assert_equal "access_denied", error.message
   end
 
   private
@@ -537,6 +520,7 @@ class SetupCommandCallbackTest < Minitest::Test
   def wait_for_code(timeout: 10)
     result = nil
     waiter = Thread.new { result = @cmd.send(:wait_for_callback, @server, STATE, timeout) }
+    waiter.report_on_exception = false
     yield
     assert waiter.join(timeout + 2), "wait_for_callback did not return"
     result

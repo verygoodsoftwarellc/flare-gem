@@ -17,7 +17,9 @@ module Flare
 
     DEFAULT_HOST = "https://flare.am"
     TIMEOUT_SECONDS = 300 # 5 minutes
-    CLIENT_READ_TIMEOUT = 2
+    CLIENT_READ_TIMEOUT = 1
+
+    class AuthorizationDenied < StandardError; end
 
     INITIALIZER_CONTENT = <<~RUBY
       # frozen_string_literal: true
@@ -141,7 +143,12 @@ module Flare
       puts
       puts "Waiting for authorization (up to 5 minutes)..."
 
-      auth_code = wait_for_callback(server, state, TIMEOUT_SECONDS)
+      begin
+        auth_code = wait_for_callback(server, state, TIMEOUT_SECONDS)
+      rescue AuthorizationDenied => e
+        puts "Authorization failed: #{e.message}"
+        exit 1
+      end
 
       unless auth_code
         puts "Timed out waiting for authorization."
@@ -162,40 +169,28 @@ module Flare
       deadline = Time.now + timeout
 
       while Time.now < deadline
-        readable = IO.select([server], nil, nil, 1)
-        next unless readable
+        next unless IO.select([server], nil, nil, 1)
 
-        client = server.accept
-        begin
-          result = handle_callback(client, expected_state)
-        rescue Timeout::Error, IOError, SystemCallError
-          next
-        ensure
-          client.close
-        end
-
-        case result
-        when :denied then return nil
-        when String then return result
-        end
+        code = handle_callback(server.accept, expected_state)
+        return code if code
       end
 
       nil
     end
 
-    # Returns the code, :denied when flare-web reports an error for this
-    # state, or nil to keep waiting.
+    # Returns the code, nil to keep waiting, or raises AuthorizationDenied
+    # when flare-web reports an error for this state.
     def handle_callback(client, expected_state)
       request_line = Timeout.timeout(CLIENT_READ_TIMEOUT) do
-        line = client.gets
-        # Read remaining headers (required by HTTP spec)
-        while (header = client.gets) && header != "\r\n"; end
-        line
+        client.gets.tap do
+          # Read remaining headers (required by HTTP spec)
+          while (header = client.gets) && header != "\r\n"; end
+        end
       end
 
       unless request_line&.start_with?("GET /callback")
         client.print "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-        return
+        return nil
       end
 
       params = parse_query_string(request_line)
@@ -207,7 +202,7 @@ module Flare
         nil
       elsif error
         client.print http_response(error_page(error))
-        :denied
+        raise AuthorizationDenied, error
       elsif code.nil? || code.empty?
         client.print http_response(error_page("No authorization code received."))
         nil
@@ -215,6 +210,10 @@ module Flare
         client.print http_response(success_page)
         code
       end
+    rescue Timeout::Error, IOError, SystemCallError
+      nil
+    ensure
+      client.close
     end
 
     def parse_query_string(request_line)
