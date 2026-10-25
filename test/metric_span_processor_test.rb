@@ -448,6 +448,17 @@ class MetricSpanProcessorTest < Minitest::Test
     _out, err = capture_io { 2.times { processor.on_finish(span) } }
 
     assert_equal 1, err.scan("ArgumentError: boom").length
+
+    reader, writer = IO.pipe
+    pid = fork do
+      reader.close
+      $stderr = writer
+      processor.on_finish(span)
+      exit!(0)
+    end
+    writer.close
+    Process.wait(pid)
+    assert_includes reader.read, "on_finish failed", "a forked worker should warn again"
   end
 
   # Cache metric tests
