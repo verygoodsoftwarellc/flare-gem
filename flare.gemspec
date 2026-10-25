@@ -33,11 +33,13 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activesupport", ">= 7.0"
   spec.add_dependency "actionpack", ">= 7.0"
   spec.add_dependency "concurrent-ruby", ">= 1.1"
-  spec.add_dependency "opentelemetry-sdk"
-  spec.add_dependency "opentelemetry-instrumentation-rack"
-  spec.add_dependency "opentelemetry-instrumentation-net_http"
-  spec.add_dependency "opentelemetry-instrumentation-active_support"
-  spec.add_dependency "opentelemetry-instrumentation-action_pack"
-  spec.add_dependency "opentelemetry-instrumentation-action_view"
-  spec.add_dependency "opentelemetry-instrumentation-active_job"
+  # Floors are the oldest versions CI installs (the Ruby 3.0 rows). The
+  # pre-1.0 instrumentation gems stay below 1.0 until Flare is tested on it.
+  spec.add_dependency "opentelemetry-sdk", "~> 1.7"
+  spec.add_dependency "opentelemetry-instrumentation-rack", "~> 0.25"
+  spec.add_dependency "opentelemetry-instrumentation-net_http", "~> 0.22"
+  spec.add_dependency "opentelemetry-instrumentation-active_support", "~> 0.7"
+  spec.add_dependency "opentelemetry-instrumentation-action_pack", "~> 0.10"
+  spec.add_dependency "opentelemetry-instrumentation-action_view", "~> 0.8"
+  spec.add_dependency "opentelemetry-instrumentation-active_job", "~> 0.7"
 end

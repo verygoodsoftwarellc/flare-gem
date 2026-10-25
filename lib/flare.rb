@@ -181,7 +181,11 @@ module Flare
     require "opentelemetry-instrumentation-rack"
     require "opentelemetry-instrumentation-net_http"
     require "opentelemetry-instrumentation-active_support"
-    require "opentelemetry/instrumentation/active_support/span_subscriber"
+    begin
+      # Internal OTel path; subscribe_to_notifications handles it moving.
+      require "opentelemetry/instrumentation/active_support/span_subscriber"
+    rescue LoadError
+    end
     require "opentelemetry-instrumentation-action_pack" if defined?(ActionController)
     require "opentelemetry-instrumentation-action_view" if defined?(ActionView)
     require "opentelemetry-instrumentation-active_job" if defined?(ActiveJob)
@@ -410,6 +414,10 @@ module Flare
   }.freeze
 
   def subscribe_to_notifications
+    unless OpenTelemetry::Instrumentation::ActiveSupport.respond_to?(:subscribe)
+      return warn "[Flare] OpenTelemetry::Instrumentation::ActiveSupport.subscribe not found. SQL, cache, mailer and custom notification spans are disabled. Check your opentelemetry-instrumentation-active_support version."
+    end
+
     NOTIFICATION_TRANSFORMERS.each do |pattern, transformer|
       OpenTelemetry::Instrumentation::ActiveSupport.subscribe(tracer, pattern, transformer)
     rescue
