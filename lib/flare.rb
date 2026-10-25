@@ -212,7 +212,9 @@ module Flare
         "OpenTelemetry::Instrumentation::Rack" => {
           untraced_requests: ->(env) {
             request = Rack::Request.new(env)
-            return true if request.path.start_with?("/flare")
+            # Skip Flare's own dashboard and assets, not app routes like /flares.
+            path = request.path
+            return true if path == "/flare" || path.start_with?("/flare/", "/flare-assets/")
 
             configuration.ignore_request.call(request)
           }
