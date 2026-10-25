@@ -82,6 +82,14 @@ module Flare
         complete: owner_finished || sampled_completion_span?(span_data),
         delay: owner_finished ? @marked_trace_grace_period : 0
       )
+    rescue StandardError => e
+      # The SDK calls processors without a rescue, so a bug here would raise
+      # into the app's request or job. Count every failure, warn once.
+      @exception_count.increment
+      return if @on_finish_error_logged
+
+      @on_finish_error_logged = true
+      @logger.warn("[Flare::FilteringSpanProcessor] on_finish failed: #{e.class}: #{e.message}")
     end
 
     def force_flush(timeout: nil)

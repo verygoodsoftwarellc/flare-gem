@@ -55,6 +55,13 @@ module Flare
       elsif view_span?(span)
         record_view_metric(span)
       end
+    rescue StandardError => e
+      # The SDK calls processors without a rescue, so a bug here would raise
+      # into the app's request or job. Warn once so it can't flood the logs.
+      return if @on_finish_error_logged
+
+      @on_finish_error_logged = true
+      Flare.logger.warn("[Flare::MetricSpanProcessor] on_finish failed: #{e.class}: #{e.message}")
     end
 
     def force_flush(timeout: nil)
