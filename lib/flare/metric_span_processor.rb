@@ -265,9 +265,14 @@ module Flare
       ((span.end_timestamp - span.start_timestamp) / 1_000_000.0).round
     end
 
+    # A 5xx is an error. So is a request that raised before any response
+    # (a timeout, a dropped connection): it has no status code, only an error
+    # span status. 4xx responses also carry an error span status, so the
+    # span status only counts when there was no response at all.
     def http_error?(span)
       status = span.attributes["http.status_code"] || span.attributes["http.response.status_code"]
-      status.to_i >= 500
+      code = status.to_i
+      code >= 500 || (code.zero? && span_error?(span))
     end
 
     def http_status_class(span)

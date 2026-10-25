@@ -259,6 +259,36 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "2xx", key.operation
   end
 
+  def test_http_client_span_without_response_counts_as_error
+    span = MockSpan.new(
+      kind: :client,
+      parent_span_id: nil,
+      attributes: {"http.method" => "POST", "http.host" => "api.stripe.com"},
+      status: OpenTelemetry::Trace::Status.error("Net::ReadTimeout")
+    )
+
+    @processor.on_end(span)
+
+    key, counter = @storage.drain.first
+    assert_equal "unknown", key.operation
+    assert_equal 1, counter[:error_count]
+  end
+
+  def test_http_client_span_4xx_does_not_count_as_error
+    span = MockSpan.new(
+      kind: :client,
+      parent_span_id: nil,
+      attributes: {"http.method" => "GET", "http.host" => "api.stripe.com", "http.status_code" => 404},
+      status: OpenTelemetry::Trace::Status.error
+    )
+
+    @processor.on_end(span)
+
+    key, counter = @storage.drain.first
+    assert_equal "4xx", key.operation
+    assert_equal 0, counter[:error_count]
+  end
+
   def test_duration_calculation
     span = MockSpan.new(
       kind: :server,
