@@ -462,3 +462,93 @@ class StatusCommandTest < Minitest::Test
     assert_includes out, "https://flare.am"
   end
 end
+
+class SetupCommandCallbackTest < Minitest::Test
+  STATE = "expected-state"
+
+  def setup
+    @server = TCPServer.new("127.0.0.1", 0)
+    @port = @server.addr[1]
+    @cmd = Flare::SetupCommand.new(force: false)
+  end
+
+  def teardown
+    @server.close unless @server.closed?
+  end
+
+  def test_returns_code_from_valid_callback
+    assert_equal "good-code", wait_for_code { send_request("/callback?state=#{STATE}&code=good-code") }
+  end
+
+  def test_keeps_waiting_after_callback_with_wrong_state
+    code = wait_for_code do
+      send_request("/callback?state=wrong&code=other")
+      send_request("/callback?state=#{STATE}&code=good-code")
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_keeps_waiting_after_error_callback_without_matching_state
+    code = wait_for_code do
+      send_request("/callback?error=access_denied")
+      send_request("/callback?state=#{STATE}&code=good-code")
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_keeps_waiting_after_callback_without_code
+    code = wait_for_code do
+      send_request("/callback?state=#{STATE}")
+      send_request("/callback?state=#{STATE}&code=good-code")
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_keeps_waiting_after_unparseable_callback_path
+    code = wait_for_code do
+      send_request("/callback?a=b|c")
+      send_request("/callback?state=#{STATE}&code=good-code")
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_keeps_waiting_after_connection_that_sends_nothing
+    code = wait_for_code do
+      silent = TCPSocket.new("127.0.0.1", @port)
+      begin
+        response = send_request("/callback?state=#{STATE}&code=good-code")
+        assert_includes response.to_s, "Authorized!"
+      ensure
+        silent.close
+      end
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_stops_on_error_callback_with_matching_state
+    code = wait_for_code do
+      send_request("/callback?state=#{STATE}&error=access_denied")
+    end
+    assert_nil code
+  end
+
+  private
+
+  def wait_for_code(timeout: 10)
+    result = nil
+    waiter = Thread.new { result = @cmd.send(:wait_for_callback, @server, STATE, timeout) }
+    yield
+    assert waiter.join(timeout + 2), "wait_for_callback did not return"
+    result
+  ensure
+    waiter&.kill
+  end
+
+  def send_request(path)
+    socket = TCPSocket.new("127.0.0.1", @port)
+    socket.write("GET #{path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    socket.read if IO.select([socket], nil, nil, 5)
+  ensure
+    socket&.close
+  end
+end

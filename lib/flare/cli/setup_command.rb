@@ -8,6 +8,7 @@ require "net/http"
 require "uri"
 require "json"
 require "fileutils"
+require "timeout"
 require_relative "output"
 
 module Flare
@@ -16,6 +17,7 @@ module Flare
 
     DEFAULT_HOST = "https://flare.am"
     TIMEOUT_SECONDS = 300 # 5 minutes
+    CLIENT_READ_TIMEOUT = 2
 
     INITIALIZER_CONTENT = <<~RUBY
       # frozen_string_literal: true
@@ -152,6 +154,10 @@ module Flare
       server&.close
     end
 
+    # Waits for flare-web to redirect the browser back with a code. Anything
+    # else that reaches the port (a stray request, a wrong or missing state,
+    # a connection that never sends a request) gets a response and is
+    # skipped, so only a matching callback ends the wait.
     def wait_for_callback(server, expected_state, timeout)
       deadline = Time.now + timeout
 
@@ -160,42 +166,55 @@ module Flare
         next unless readable
 
         client = server.accept
-        request_line = client.gets
-
-        unless request_line&.start_with?("GET /callback")
-          client.print "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-          client.close
+        begin
+          result = handle_callback(client, expected_state)
+        rescue Timeout::Error, IOError, SystemCallError
           next
+        ensure
+          client.close
         end
 
-        # Read remaining headers (required by HTTP spec)
-        while (line = client.gets) && line != "\r\n"; end
-
-        params = parse_query_string(request_line)
-        returned_state = params["state"]
-        code = params["code"]
-        error = params["error"]
-
-        if error
-          client.print http_response(error_page(error))
-          client.close
-          return nil
-        elsif returned_state != expected_state
-          client.print http_response(error_page("State mismatch. Please try again."))
-          client.close
-          return nil
-        elsif code.nil? || code.empty?
-          client.print http_response(error_page("No authorization code received."))
-          client.close
-          return nil
-        else
-          client.print http_response(success_page)
-          client.close
-          return code
+        case result
+        when :denied then return nil
+        when String then return result
         end
       end
 
       nil
+    end
+
+    # Returns the code, :denied when flare-web reports an error for this
+    # state, or nil to keep waiting.
+    def handle_callback(client, expected_state)
+      request_line = Timeout.timeout(CLIENT_READ_TIMEOUT) do
+        line = client.gets
+        # Read remaining headers (required by HTTP spec)
+        while (header = client.gets) && header != "\r\n"; end
+        line
+      end
+
+      unless request_line&.start_with?("GET /callback")
+        client.print "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+        return
+      end
+
+      params = parse_query_string(request_line)
+      code = params["code"]
+      error = params["error"]
+
+      if params["state"] != expected_state
+        client.print http_response(error_page("State mismatch. Please try again."))
+        nil
+      elsif error
+        client.print http_response(error_page(error))
+        :denied
+      elsif code.nil? || code.empty?
+        client.print http_response(error_page("No authorization code received."))
+        nil
+      else
+        client.print http_response(success_page)
+        code
+      end
     end
 
     def parse_query_string(request_line)
@@ -205,6 +224,8 @@ module Flare
       query = URI(path).query
       return {} unless query
       URI.decode_www_form(query).to_h
+    rescue URI::InvalidURIError, ArgumentError
+      {}
     end
 
     def http_response(body)
