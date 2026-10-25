@@ -3,31 +3,12 @@
 require_relative "test_helper"
 require "flare/metric_storage"
 require "flare/metric_span_processor"
-require "flare"
 
 class MetricSpanProcessorTest < Minitest::Test
   def setup
     @storage = Flare::MetricStorage.new
     @http_config = Flare::HttpMetricsConfig.new
     @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
-  end
-
-  def test_on_finish_contains_errors_and_warns_once
-    storage = Object.new
-    storage.define_singleton_method(:increment) { |*_args, **_opts| raise ArgumentError, "boom" }
-    processor = Flare::MetricSpanProcessor.new(storage: storage, http_metrics_config: @http_config)
-    span = MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 200, "code.namespace" => "UsersController" })
-
-    log = StringIO.new
-    previous_logger = Flare.logger
-    Flare.logger = Logger.new(log)
-    begin
-      2.times { processor.on_finish(span) }
-    ensure
-      Flare.logger = previous_logger
-    end
-
-    assert_equal 1, log.string.scan("ArgumentError: boom").length
   end
 
   def test_web_request_creates_metric
@@ -459,6 +440,26 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   # Cache metric tests
+
+  def test_on_finish_contains_errors_and_warns_once
+    require "flare" # for Flare.logger
+
+    storage = Object.new
+    storage.define_singleton_method(:increment) { |*_args, **_opts| raise ArgumentError, "boom" }
+    processor = Flare::MetricSpanProcessor.new(storage: storage, http_metrics_config: @http_config)
+    span = MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 200, "code.namespace" => "UsersController" })
+
+    log = StringIO.new
+    previous_logger = Flare.logger
+    Flare.logger = Logger.new(log)
+    begin
+      2.times { processor.on_finish(span) }
+    ensure
+      Flare.logger = previous_logger
+    end
+
+    assert_equal 1, log.string.scan("ArgumentError: boom").length
+  end
 
   def test_cache_read_hit_creates_metric
     span = MockSpan.new(
