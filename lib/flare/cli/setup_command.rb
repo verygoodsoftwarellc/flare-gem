@@ -8,6 +8,7 @@ require "net/http"
 require "uri"
 require "json"
 require "fileutils"
+require "timeout"
 require_relative "output"
 
 module Flare
@@ -16,6 +17,9 @@ module Flare
 
     DEFAULT_HOST = "https://flare.am"
     TIMEOUT_SECONDS = 300 # 5 minutes
+    CLIENT_READ_TIMEOUT = 1
+
+    class AuthorizationDenied < StandardError; end
 
     INITIALIZER_CONTENT = <<~RUBY
       # frozen_string_literal: true
@@ -139,7 +143,12 @@ module Flare
       puts
       puts "Waiting for authorization (up to 5 minutes)..."
 
-      auth_code = wait_for_callback(server, state, TIMEOUT_SECONDS)
+      begin
+        auth_code = wait_for_callback(server, state, TIMEOUT_SECONDS)
+      rescue AuthorizationDenied => e
+        puts "Authorization failed: #{e.message}"
+        exit 1
+      end
 
       unless auth_code
         puts "Timed out waiting for authorization."
@@ -152,50 +161,59 @@ module Flare
       server&.close
     end
 
+    # Waits for flare-web to redirect the browser back with a code. Anything
+    # else that reaches the port (a stray request, a wrong or missing state,
+    # a connection that never sends a request) gets a response and is
+    # skipped, so only a matching callback ends the wait.
     def wait_for_callback(server, expected_state, timeout)
       deadline = Time.now + timeout
 
       while Time.now < deadline
-        readable = IO.select([server], nil, nil, 1)
-        next unless readable
+        next unless IO.select([server], nil, nil, 1)
 
-        client = server.accept
-        request_line = client.gets
-
-        unless request_line&.start_with?("GET /callback")
-          client.print "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
-          client.close
-          next
-        end
-
-        # Read remaining headers (required by HTTP spec)
-        while (line = client.gets) && line != "\r\n"; end
-
-        params = parse_query_string(request_line)
-        returned_state = params["state"]
-        code = params["code"]
-        error = params["error"]
-
-        if error
-          client.print http_response(error_page(error))
-          client.close
-          return nil
-        elsif returned_state != expected_state
-          client.print http_response(error_page("State mismatch. Please try again."))
-          client.close
-          return nil
-        elsif code.nil? || code.empty?
-          client.print http_response(error_page("No authorization code received."))
-          client.close
-          return nil
-        else
-          client.print http_response(success_page)
-          client.close
-          return code
-        end
+        code = handle_callback(server.accept, expected_state)
+        return code if code
       end
 
       nil
+    end
+
+    # Returns the code, nil to keep waiting, or raises AuthorizationDenied
+    # when flare-web reports an error for this state.
+    def handle_callback(client, expected_state)
+      request_line = Timeout.timeout(CLIENT_READ_TIMEOUT) do
+        client.gets.tap do
+          # Read remaining headers (required by HTTP spec)
+          while (header = client.gets) && header != "\r\n"; end
+        end
+      end
+
+      unless request_line&.start_with?("GET /callback")
+        client.print "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n"
+        return nil
+      end
+
+      params = parse_query_string(request_line)
+      code = params["code"]
+      error = params["error"]
+
+      if params["state"] != expected_state
+        client.print http_response(error_page("State mismatch. Please try again."))
+        nil
+      elsif error
+        client.print http_response(error_page(error))
+        raise AuthorizationDenied, error
+      elsif code.nil? || code.empty?
+        client.print http_response(error_page("No authorization code received."))
+        nil
+      else
+        client.print http_response(success_page)
+        code
+      end
+    rescue Timeout::Error, IOError, SystemCallError
+      nil
+    ensure
+      client.close
     end
 
     def parse_query_string(request_line)
@@ -205,6 +223,8 @@ module Flare
       query = URI(path).query
       return {} unless query
       URI.decode_www_form(query).to_h
+    rescue URI::InvalidURIError, ArgumentError
+      {}
     end
 
     def http_response(body)
