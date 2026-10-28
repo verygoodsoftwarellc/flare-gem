@@ -2,6 +2,7 @@
 
 require "json"
 require "optparse"
+require "time"
 require_relative "output"
 
 module Flare
@@ -69,7 +70,7 @@ module Flare
           queries: query_counts.fetch(r[:trace_id], 0),
           controller: r[:controller],
           action: r[:action],
-          created_at: r[:created_at],
+          started_at: Time.at(r[:start_timestamp] / 1_000_000_000r).iso8601(3),
         }
       end
     end
@@ -77,7 +78,7 @@ module Flare
     def format_row(request)
       endpoint = [request[:controller], request[:action]].compact.join("#")
       [
-        dim(request[:created_at]),
+        dim(request[:started_at]),
         request[:method].to_s.ljust(6),
         request[:status].to_s.ljust(3),
         format("%8.1fms", request[:duration_ms]),

@@ -17,7 +17,8 @@ class CLIRequestsTest < Minitest::Test
   def test_lists_recent_requests_newest_first_with_query_counts
     in_app do |dir|
       db = create_database(dir)
-      insert_request(db, trace: "t1", path: "/posts", status: 200, controller: "PostsController", action: "index", ms: 12.34, at: Time.now - 60,
+      started = Time.at(Time.now.to_i - 60, 123_456, :usec)
+      insert_request(db, trace: "t1", path: "/posts", status: 200, controller: "PostsController", action: "index", ms: 12.34, at: started,
         queries: ["SELECT * FROM posts", "BEGIN", "SELECT * FROM users WHERE id = 1", "COMMIT"])
       insert_request(db, trace: "t2", path: "/posts/1", status: 404, controller: "PostsController", action: "show", ms: 3, at: Time.now,
         queries: [])
@@ -31,7 +32,8 @@ class CLIRequestsTest < Minitest::Test
       assert_equal({
         "trace_id" => "t1", "method" => "GET", "path" => "/posts", "status" => 200, "duration_ms" => 12.3,
         "queries" => 2, "controller" => "PostsController", "action" => "index",
-      }, requests.last.reject { |k, _| k == "created_at" })
+        "started_at" => started.iso8601(3),
+      }, requests.last)
       assert_equal 0, requests.first["queries"]
 
       out, err, status = flare(dir, "requests", "--last", "1")
@@ -127,9 +129,10 @@ class CLIRequestsTest < Minitest::Test
 
   def insert_span(db, trace:, name:, kind:, parent:, ns:, at:, properties:)
     stamp = at.iso8601(6)
-    db.execute(<<~SQL, [name, kind, "s#{rand(1 << 32)}", trace, parent, ns, stamp, stamp])
+    start = (at.to_r * 1_000_000_000).to_i
+    db.execute(<<~SQL, [name, kind, "s#{rand(1 << 32)}", trace, parent, start, start + ns, stamp, stamp])
       INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
     id = db.last_insert_row_id
     properties.each do |key, value|

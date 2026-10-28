@@ -67,8 +67,8 @@ flare requests # List recent requests from local development spans
 
 ```bash
 $ bundle exec flare requests --last 2
-2026-10-27T20:14:03-04:00  GET     200       48.2ms    12 queries  /posts  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
-2026-10-27T20:13:41-04:00  GET     404        3.0ms     1 queries  /posts/9  PostsController#show  0af7651916cd43dd8448eb211c80319c
+2026-10-27T20:14:03.412-04:00  GET     200       48.2ms    12 queries  /posts  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
+2026-10-27T20:13:41.087-04:00  GET     404        3.0ms     1 queries  /posts/9  PostsController#show  0af7651916cd43dd8448eb211c80319c
 ```
 
 Pass `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
