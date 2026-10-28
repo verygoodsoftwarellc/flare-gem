@@ -20,7 +20,11 @@ module Flare
 
       OptionParser.new do |opts|
         opts.banner = "Usage: flare requests [options]"
-        opts.on("--last N", Integer, "Number of requests to show (default: #{DEFAULT_LIMIT})") { |n| @limit = n }
+        opts.on("--last N", Integer, "Number of requests to show (default: #{DEFAULT_LIMIT})") do |n|
+          raise OptionParser::InvalidArgument, "#{n} (must be at least 1)" if n < 1
+
+          @limit = n
+        end
         opts.on("--json", "Print JSON instead of a table") { @json = true }
         opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
       end.parse!(argv)
@@ -36,7 +40,12 @@ module Flare
         exit 1
       end
 
-      requests = load_requests
+      begin
+        requests = load_requests
+      rescue SQLite3::Exception => e
+        $stderr.puts "Could not read #{@database_path}: #{e.message}"
+        exit 1
+      end
 
       if @json
         puts JSON.pretty_generate(requests)

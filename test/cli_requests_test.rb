@@ -93,6 +93,34 @@ class CLIRequestsTest < Minitest::Test
     end
   end
 
+  def test_rejects_a_last_below_one
+    in_app do |dir|
+      create_database(dir).close
+
+      %w[0 -1].each do |n|
+        out, err, status = flare(dir, "requests", "--last", n)
+
+        refute status.success?, "--last #{n} should fail"
+        assert_empty out
+        assert_equal "invalid argument: --last #{n} (must be at least 1)\n", err
+      end
+    end
+  end
+
+  def test_explains_a_file_that_is_not_a_spans_database
+    in_app do |dir|
+      FileUtils.mkdir_p(File.join(dir, "db"))
+      File.write(File.join(dir, "db", "flare.sqlite3"), "not a database")
+
+      out, err, status = flare(dir, "requests")
+
+      refute status.success?
+      assert_empty out
+      assert_match(/\ACould not read .*flare\.sqlite3: file is not a database/, err)
+      refute_includes err, ".rb:", "no backtrace"
+    end
+  end
+
   private
 
   def in_app
