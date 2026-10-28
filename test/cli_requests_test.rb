@@ -125,6 +125,21 @@ class CLIRequestsTest < Minitest::Test
     end
   end
 
+  def test_leaves_a_database_without_flare_tables_untouched
+    in_app do |dir|
+      path = File.join(dir, "app.sqlite3")
+      SQLite3::Database.new(path).tap { |db| db.execute("CREATE TABLE users (id INTEGER)") }.close
+      before = File.binread(path)
+
+      out, err, status = flare(dir, "requests", "--db", path)
+
+      refute status.success?
+      assert_empty out
+      assert_includes err, "Could not read #{path}: no such table: flare_spans"
+      assert_equal before, File.binread(path), "should not create Flare tables"
+    end
+  end
+
   private
 
   def in_app

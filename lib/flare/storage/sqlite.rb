@@ -16,10 +16,13 @@ module Flare
         flare/
       ].freeze
 
-      def initialize(database_path)
+      # readonly: true opens an existing database as is, without creating
+      # tables, for tools that only inspect spans (like `flare requests`).
+      def initialize(database_path, readonly: false)
         @database_path = database_path
+        @readonly = readonly
         @mutex = Mutex.new
-        @setup = false
+        @setup = readonly
       end
 
       # List root spans that are HTTP requests (for the requests index)
@@ -724,7 +727,7 @@ module Flare
         Thread.current[connection_key] ||= begin
           dir = File.dirname(@database_path)
           FileUtils.mkdir_p(dir) unless File.directory?(dir)
-          db = ::SQLite3::Database.new(@database_path, results_as_hash: true)
+          db = ::SQLite3::Database.new(@database_path, results_as_hash: true, readonly: @readonly)
           db.busy_timeout = 5000
           db
         end

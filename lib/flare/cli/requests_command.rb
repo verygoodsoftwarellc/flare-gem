@@ -68,7 +68,7 @@ module Flare
       require_relative "../storage"
       require_relative "../storage/sqlite"
 
-      storage = Storage::SQLite.new(@database_path)
+      storage = Storage::SQLite.new(@database_path, readonly: true)
       requests = storage.list_requests(limit: @limit)
       query_counts = storage.count_queries_by_trace(requests.map { |r| r[:trace_id] })
 
