@@ -24,6 +24,9 @@ module Flare
         opts.on("--json", "Print JSON instead of a table") { @json = true }
         opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
       end.parse!(argv)
+    rescue OptionParser::ParseError => e
+      $stderr.puts e.message
+      exit 1
     end
 
     def run

@@ -8,6 +8,10 @@ require "sqlite3"
 require "time"
 require "tmpdir"
 
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+require "flare/storage"
+require "flare/storage/sqlite"
+
 # Runs exe/flare in a subprocess, the way `bundle exec flare requests` runs in
 # an app, against a spans database laid out like SQLiteExporter writes it.
 class CLIRequestsTest < Minitest::Test
@@ -102,20 +106,8 @@ class CLIRequestsTest < Minitest::Test
   def create_database(dir, relative = "db/flare.sqlite3")
     path = File.join(dir, relative)
     FileUtils.mkdir_p(File.dirname(path))
-    db = SQLite3::Database.new(path)
-    db.execute_batch(<<~SQL)
-      CREATE TABLE flare_spans (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL,
-        span_id TEXT NOT NULL, trace_id TEXT NOT NULL, parent_span_id TEXT, start_timestamp INTEGER NOT NULL,
-        end_timestamp INTEGER NOT NULL, total_recorded_properties INTEGER NOT NULL DEFAULT 0,
-        total_recorded_events INTEGER NOT NULL DEFAULT 0, total_recorded_links INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-      CREATE TABLE flare_events (id INTEGER PRIMARY KEY AUTOINCREMENT, span_id INTEGER NOT NULL, name TEXT NOT NULL,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-      CREATE TABLE flare_properties (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, value TEXT,
-        value_type INTEGER NOT NULL DEFAULT 0, owner_type TEXT NOT NULL, owner_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    SQL
-    db
+    Flare::Storage::SQLite.new(path).send(:setup_database)
+    SQLite3::Database.new(path)
   end
 
   def insert_request(db, trace:, path:, status:, controller:, action:, ms:, at:, queries: [])

@@ -159,23 +159,13 @@ module Flare
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        # Build OR conditions for matching span names
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -213,22 +203,13 @@ module Flare
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -248,16 +229,15 @@ module Flare
       def count_queries_by_trace(trace_ids)
         return {} if trace_ids.empty?
 
-        patterns = SPAN_CATEGORIES["queries"]
-        values = trace_ids + patterns.map { |p| "%#{p}%" } + TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" }
+        transaction_join, conditions, values = category_filter("queries")
+        conditions.unshift("s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})")
+        values.unshift(*trace_ids)
 
         rows = query_all(<<~SQL, values)
           SELECT s.trace_id, COUNT(*) as count
           FROM flare_spans s
-          LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'
-          WHERE s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})
-          AND (#{patterns.map { "s.name LIKE ?" }.join(" OR ")})
-          AND (stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))
+          #{transaction_join}
+          WHERE #{conditions.join(" AND ")}
           GROUP BY s.trace_id
         SQL
 
@@ -717,6 +697,24 @@ module Flare
 
       # Keyed by path, like SQLiteExporter, so storages for different files on
       # the same thread don't share a connection.
+      # SQL join, conditions and bind values that select a category's spans by
+      # name. Queries also leave out transaction statements (BEGIN, COMMIT,
+      # ROLLBACK).
+      def category_filter(category)
+        patterns = SPAN_CATEGORIES.fetch(category)
+        conditions = ["(#{patterns.map { "s.name LIKE ?" }.join(" OR ")})"]
+        values = patterns.map { |p| "%#{p}%" }
+        join = ""
+
+        if category == "queries"
+          join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
+          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))"
+          values.concat(TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" })
+        end
+
+        [join, conditions, values]
+      end
+
       def connection_key
         :"flare_storage_db_#{@database_path.hash}"
       end

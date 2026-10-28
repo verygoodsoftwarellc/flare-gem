@@ -29,13 +29,7 @@ module Flare
         StatusCommand.new.run
       when "requests"
         require_relative "cli/requests_command"
-        begin
-          requests_command = RequestsCommand.new(argv.drop(1))
-        rescue OptionParser::ParseError => e
-          $stderr.puts e.message
-          exit 1
-        end
-        requests_command.run
+        RequestsCommand.new(argv.drop(1)).run
       when "version", "-v", "--version"
         puts "flare #{Flare::VERSION}"
       when "help", nil, "-h", "--help"
