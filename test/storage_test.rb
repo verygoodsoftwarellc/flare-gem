@@ -45,6 +45,24 @@ class StorageTest < Minitest::Test
     end
   end
 
+  def test_count_queries_by_trace_batches_trace_ids_under_old_sqlite_bind_limits
+    with_storage do |storage, path|
+      insert_span(path, "sql.active_record", Time.now)
+      SQLite3::Database.new(path).tap { |db| db.execute("UPDATE flare_spans SET parent_span_id = 'p'") }.close
+      bind_counts = []
+      storage.define_singleton_method(:query_all) do |sql, values = []|
+        bind_counts << values.size
+        super(sql, values)
+      end
+
+      counts = storage.count_queries_by_trace(Array.new(1_200) { |i| "missing#{i}" } + ["t"])
+
+      assert_equal({ "t" => 1 }, counts)
+      assert_equal 3, bind_counts.size
+      assert bind_counts.all? { |n| n <= 999 }, "bind counts #{bind_counts.inspect} exceed 999"
+    end
+  end
+
   private
 
   # Storage caches its connection per thread, so use a fresh thread to avoid

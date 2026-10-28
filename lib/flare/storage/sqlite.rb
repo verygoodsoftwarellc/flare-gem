@@ -224,24 +224,25 @@ module Flare
         row ? row["count"] : 0
       end
 
+      # Older SQLite builds allow 999 bind parameters per statement.
+      TRACE_ID_BATCH_SIZE = 500
+
       # Number of SQL query spans in each trace (transaction statements
       # excluded, like the queries list). Returns { trace_id => count }.
       def count_queries_by_trace(trace_ids)
-        return {} if trace_ids.empty?
+        transaction_join, filter_conditions, filter_values = category_filter("queries")
 
-        transaction_join, conditions, values = category_filter("queries")
-        conditions.unshift("s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})", "s.parent_span_id != ?")
-        values.unshift(*trace_ids, MISSING_PARENT_ID)
-
-        rows = query_all(<<~SQL, values)
-          SELECT s.trace_id, COUNT(*) as count
-          FROM flare_spans s
-          #{transaction_join}
-          WHERE #{conditions.join(" AND ")}
-          GROUP BY s.trace_id
-        SQL
-
-        rows.to_h { |row| [row["trace_id"], row["count"]] }
+        trace_ids.each_slice(TRACE_ID_BATCH_SIZE).each_with_object({}) do |batch, counts|
+          conditions = ["s.trace_id IN (#{batch.map { "?" }.join(", ")})", "s.parent_span_id != ?", *filter_conditions]
+          rows = query_all(<<~SQL, [*batch, MISSING_PARENT_ID, *filter_values])
+            SELECT s.trace_id, COUNT(*) as count
+            FROM flare_spans s
+            #{transaction_join}
+            WHERE #{conditions.join(" AND ")}
+            GROUP BY s.trace_id
+          SQL
+          rows.each { |row| counts[row["trace_id"]] = row["count"] }
+        end
       end
 
       # Find a single span by its database ID
