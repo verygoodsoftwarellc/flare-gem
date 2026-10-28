@@ -8,7 +8,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest is now 26.04, which setup-ruby has no Ruby 3.0/3.1 builds
+    # for. Pin 24.04 while the gem still supports those Rubies.
+    runs-on: ubuntu-24.04
     name: Ruby ${{ matrix.ruby }} / Rails ${{ matrix.rails }}
     strategy:
       fail-fast: false
