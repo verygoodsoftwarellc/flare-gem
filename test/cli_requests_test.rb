@@ -24,6 +24,9 @@ class CLIRequestsTest < Minitest::Test
       started = Time.at(Time.now.to_i - 60, 123_456, :usec)
       insert_request(db, trace: "t1", path: "/posts", status: 200, controller: "PostsController", action: "index", ms: 12.34, at: started,
         queries: ["SELECT * FROM posts", "BEGIN", "SELECT * FROM users WHERE id = 1", "COMMIT"])
+      # A root span named "GET /postgres" matches the query name patterns but
+      # is the request, not a query.
+      insert_request(db, trace: "t0", path: "/postgres", status: 200, controller: "DatabasesController", action: "show", ms: 1, at: Time.now - 120)
       insert_request(db, trace: "t2", path: "/posts/1", status: 404, controller: "PostsController", action: "show", ms: 3, at: Time.now,
         queries: [])
       db.close
@@ -32,12 +35,13 @@ class CLIRequestsTest < Minitest::Test
 
       assert status.success?, err
       requests = JSON.parse(out)
-      assert_equal %w[t2 t1], requests.map { |r| r["trace_id"] }, "newest first"
+      assert_equal %w[t2 t1 t0], requests.map { |r| r["trace_id"] }, "newest first"
       assert_equal({
         "trace_id" => "t1", "method" => "GET", "path" => "/posts", "status" => 200, "duration_ms" => 12.3,
         "queries" => 2, "controller" => "PostsController", "action" => "index",
         "started_at" => started.iso8601(3),
-      }, requests.last)
+      }, requests[1])
+      assert_equal 0, requests.last["queries"], "the request span itself isn't a query"
       assert_equal 0, requests.first["queries"]
 
       out, err, status = flare(dir, "requests", "--last", "1")

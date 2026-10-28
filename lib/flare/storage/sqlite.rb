@@ -230,8 +230,8 @@ module Flare
         return {} if trace_ids.empty?
 
         transaction_join, conditions, values = category_filter("queries")
-        conditions.unshift("s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})")
-        values.unshift(*trace_ids)
+        conditions.unshift("s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})", "s.parent_span_id != ?")
+        values.unshift(*trace_ids, MISSING_PARENT_ID)
 
         rows = query_all(<<~SQL, values)
           SELECT s.trace_id, COUNT(*) as count
