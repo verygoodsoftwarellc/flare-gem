@@ -118,7 +118,7 @@ Users instrument their code with `ActiveSupport::Notifications.instrument("app.w
 
 ## CLI
 
-`exe/flare` - entry point. Commands: `setup`, `version`, `help`.
+`exe/flare` - entry point. Commands: `setup`, `doctor`, `status`, `requests`, `version`, `help`.
 
 `--force` flag on setup re-runs auth even if `FLARE_KEY` exists in `.env`.
 

@@ -243,6 +243,27 @@ module Flare
         row ? row["count"] : 0
       end
 
+      # Number of SQL query spans in each trace (transaction statements
+      # excluded, like the queries list). Returns { trace_id => count }.
+      def count_queries_by_trace(trace_ids)
+        return {} if trace_ids.empty?
+
+        patterns = SPAN_CATEGORIES["queries"]
+        values = trace_ids + patterns.map { |p| "%#{p}%" } + TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" }
+
+        rows = query_all(<<~SQL, values)
+          SELECT s.trace_id, COUNT(*) as count
+          FROM flare_spans s
+          LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'
+          WHERE s.trace_id IN (#{trace_ids.map { "?" }.join(", ")})
+          AND (#{patterns.map { "s.name LIKE ?" }.join(" OR ")})
+          AND (stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))
+          GROUP BY s.trace_id
+        SQL
+
+        rows.to_h { |row| [row["trace_id"], row["count"]] }
+      end
+
       # Find a single span by its database ID
       def find_span(id)
         row = query_one(<<~SQL, [id])

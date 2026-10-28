@@ -1,0 +1,141 @@
+# frozen_string_literal: true
+
+require "minitest/autorun"
+require "json"
+require "open3"
+require "rbconfig"
+require "sqlite3"
+require "time"
+require "tmpdir"
+
+# Runs exe/flare in a subprocess, the way `bundle exec flare requests` runs in
+# an app, against a spans database laid out like SQLiteExporter writes it.
+class CLIRequestsTest < Minitest::Test
+  ROOT = File.expand_path("..", __dir__)
+  ROOT_PARENT = "0000000000000000"
+
+  def test_lists_recent_requests_newest_first_with_query_counts
+    in_app do |dir|
+      db = create_database(dir)
+      insert_request(db, trace: "t1", path: "/posts", status: 200, controller: "PostsController", action: "index", ms: 12.34, at: Time.now - 60,
+        queries: ["SELECT * FROM posts", "BEGIN", "SELECT * FROM users WHERE id = 1", "COMMIT"])
+      insert_request(db, trace: "t2", path: "/posts/1", status: 404, controller: "PostsController", action: "show", ms: 3, at: Time.now,
+        queries: [])
+      db.close
+
+      out, err, status = flare(dir, "requests", "--json")
+
+      assert status.success?, err
+      requests = JSON.parse(out)
+      assert_equal %w[t2 t1], requests.map { |r| r["trace_id"] }, "newest first"
+      assert_equal({
+        "trace_id" => "t1", "method" => "GET", "path" => "/posts", "status" => 200, "duration_ms" => 12.3,
+        "queries" => 2, "controller" => "PostsController", "action" => "index",
+      }, requests.last.reject { |k, _| k == "created_at" })
+      assert_equal 0, requests.first["queries"]
+
+      out, err, status = flare(dir, "requests", "--last", "1")
+
+      assert status.success?, err
+      lines = out.lines
+      assert_equal 1, lines.size
+      assert_match %r{GET\s+404\s+3\.0ms\s+0 queries\s+/posts/1\s+PostsController#show\s+t2}, lines.first
+    end
+  end
+
+  def test_says_so_when_nothing_is_recorded
+    in_app do |dir|
+      create_database(dir).close
+
+      out, err, status = flare(dir, "requests")
+
+      assert status.success?, err
+      assert_equal "No requests recorded yet.\n", out
+    end
+  end
+
+  def test_fails_with_a_hint_and_creates_nothing_when_the_database_is_missing
+    in_app do |dir|
+      out, err, status = flare(dir, "requests")
+
+      refute status.success?
+      assert_empty out
+      assert_includes err, "No Flare spans database at #{File.join(dir, "db", "flare.sqlite3")}"
+      refute File.exist?(File.join(dir, "db")), "should not create the database"
+    end
+  end
+
+  def test_reads_the_database_given_with_db
+    in_app do |dir|
+      db = create_database(dir, "tmp/custom.sqlite3")
+      insert_request(db, trace: "t1", path: "/", status: 200, controller: "HomeController", action: "show", ms: 1, at: Time.now)
+      db.close
+
+      out, err, status = flare(dir, "requests", "--json", "--db", "tmp/custom.sqlite3")
+
+      assert status.success?, err
+      assert_equal ["t1"], JSON.parse(out).map { |r| r["trace_id"] }
+    end
+  end
+
+  def test_rejects_bad_options
+    in_app do |dir|
+      _, err, status = flare(dir, "requests", "--last", "lots")
+
+      refute status.success?
+      assert_includes err, "invalid argument: --last lots"
+    end
+  end
+
+  private
+
+  def in_app
+    Dir.mktmpdir { |dir| yield File.realpath(dir) }
+  end
+
+  def flare(dir, *args)
+    Open3.capture3(RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args, chdir: dir)
+  end
+
+  def create_database(dir, relative = "db/flare.sqlite3")
+    path = File.join(dir, relative)
+    FileUtils.mkdir_p(File.dirname(path))
+    db = SQLite3::Database.new(path)
+    db.execute_batch(<<~SQL)
+      CREATE TABLE flare_spans (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL,
+        span_id TEXT NOT NULL, trace_id TEXT NOT NULL, parent_span_id TEXT, start_timestamp INTEGER NOT NULL,
+        end_timestamp INTEGER NOT NULL, total_recorded_properties INTEGER NOT NULL DEFAULT 0,
+        total_recorded_events INTEGER NOT NULL DEFAULT 0, total_recorded_links INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE flare_events (id INTEGER PRIMARY KEY AUTOINCREMENT, span_id INTEGER NOT NULL, name TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE flare_properties (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, value TEXT,
+        value_type INTEGER NOT NULL DEFAULT 0, owner_type TEXT NOT NULL, owner_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    SQL
+    db
+  end
+
+  def insert_request(db, trace:, path:, status:, controller:, action:, ms:, at:, queries: [])
+    root = insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: (ms * 1_000_000).to_i, at: at,
+      properties: { "http.method" => "GET", "http.target" => path, "http.status_code" => status, "code.namespace" => controller, "code.function" => action })
+    queries.each do |sql|
+      insert_span(db, trace: trace, name: "sql.active_record", kind: "internal", parent: root.to_s, ns: 1000, at: at,
+        properties: { "db.statement" => sql })
+    end
+  end
+
+  def insert_span(db, trace:, name:, kind:, parent:, ns:, at:, properties:)
+    stamp = at.iso8601(6)
+    db.execute(<<~SQL, [name, kind, "s#{rand(1 << 32)}", trace, parent, ns, stamp, stamp])
+      INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
+    SQL
+    id = db.last_insert_row_id
+    properties.each do |key, value|
+      db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES (?, ?, ?, 'Flare::Span', ?, ?, ?)",
+        [key, JSON.generate(value), value.is_a?(Integer) ? 1 : 0, id, stamp, stamp])
+    end
+    id
+  end
+end
