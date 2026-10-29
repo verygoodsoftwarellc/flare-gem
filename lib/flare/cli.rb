@@ -8,6 +8,7 @@ module Flare
       "setup" => "Authenticate and configure Flare for this project",
       "doctor" => "Check your Flare setup for issues",
       "status" => "Show current Flare configuration",
+      "requests" => "List recent requests from local development spans",
       "version" => "Print the Flare version",
       "help" => "Show this help message",
     }.freeze
@@ -26,6 +27,9 @@ module Flare
       when "status"
         require_relative "cli/status_command"
         StatusCommand.new.run
+      when "requests"
+        require_relative "cli/requests_command"
+        RequestsCommand.new(argv.drop(1)).run
       when "version", "-v", "--version"
         puts "flare #{Flare::VERSION}"
       when "help", nil, "-h", "--help"

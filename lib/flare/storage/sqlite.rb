@@ -16,10 +16,13 @@ module Flare
         flare/
       ].freeze
 
-      def initialize(database_path)
+      # readonly: true opens an existing database as is, without creating
+      # tables, for tools that only inspect spans (like `flare requests`).
+      def initialize(database_path, readonly: false)
         @database_path = database_path
+        @readonly = readonly
         @mutex = Mutex.new
-        @setup = false
+        @setup = readonly
       end
 
       # List root spans that are HTTP requests (for the requests index)
@@ -159,23 +162,13 @@ module Flare
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        # Build OR conditions for matching span names
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -213,22 +206,13 @@ module Flare
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -241,6 +225,27 @@ module Flare
         SQL
 
         row ? row["count"] : 0
+      end
+
+      # Older SQLite builds allow 999 bind parameters per statement.
+      TRACE_ID_BATCH_SIZE = 500
+
+      # Number of SQL query spans in each trace (transaction statements
+      # excluded, like the queries list). Returns { trace_id => count }.
+      def count_queries_by_trace(trace_ids)
+        transaction_join, filter_conditions, filter_values = category_filter("queries")
+
+        trace_ids.each_slice(TRACE_ID_BATCH_SIZE).each_with_object({}) do |batch, counts|
+          conditions = ["s.trace_id IN (#{batch.map { "?" }.join(", ")})", "s.parent_span_id != ?", *filter_conditions]
+          rows = query_all(<<~SQL, [*batch, MISSING_PARENT_ID, *filter_values])
+            SELECT s.trace_id, COUNT(*) as count
+            FROM flare_spans s
+            #{transaction_join}
+            WHERE #{conditions.join(" AND ")}
+            GROUP BY s.trace_id
+          SQL
+          rows.each { |row| counts[row["trace_id"]] = row["count"] }
+        end
       end
 
       # Find a single span by its database ID
@@ -696,6 +701,24 @@ module Flare
 
       # Keyed by path, like SQLiteExporter, so storages for different files on
       # the same thread don't share a connection.
+      # SQL join, conditions and bind values that select a category's spans by
+      # name. Queries also leave out transaction statements (BEGIN, COMMIT,
+      # ROLLBACK).
+      def category_filter(category)
+        patterns = SPAN_CATEGORIES.fetch(category)
+        conditions = ["(#{patterns.map { "s.name LIKE ?" }.join(" OR ")})"]
+        values = patterns.map { |p| "%#{p}%" }
+        join = ""
+
+        if category == "queries"
+          join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
+          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))"
+          values.concat(TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" })
+        end
+
+        [join, conditions, values]
+      end
+
       def connection_key
         :"flare_storage_db_#{@database_path.hash}"
       end
@@ -704,7 +727,7 @@ module Flare
         Thread.current[connection_key] ||= begin
           dir = File.dirname(@database_path)
           FileUtils.mkdir_p(dir) unless File.directory?(dir)
-          db = ::SQLite3::Database.new(@database_path, results_as_hash: true)
+          db = ::SQLite3::Database.new(@database_path, results_as_hash: true, readonly: @readonly)
           db.busy_timeout = 5000
           db
         end
