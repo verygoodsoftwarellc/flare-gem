@@ -61,6 +61,7 @@ flare setup    # Authenticate and configure Flare
 flare doctor   # Check your setup for issues
 flare status   # Show current configuration
 flare requests # List recent requests from local development spans
+flare request  # Show one request's timeline from local development spans
 ```
 
 `flare requests` reads the local spans database, so you or a coding agent can make a request and check its duration and query count without opening `/flare`:
@@ -71,7 +72,19 @@ $ bundle exec flare requests --last 2
 2026-10-27T20:13:41.087-04:00  GET     404        3.0ms     1 queries  /posts/9  PostsController#show  0af7651916cd43dd8448eb211c80319c
 ```
 
-Pass `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
+`flare request <trace_id>` shows what one of those requests did, in order, with the code that ran each query:
+
+```bash
+$ bundle exec flare request 4bf92f3577b34da6a3ce929d0e0e4736
+GET /posts  200  48.2ms  PostsController#index
+Started 2026-10-27T20:14:03.412-04:00  12 queries
+
+   offset  duration
+    1.2ms     0.4ms  sql.active_record: SELECT "posts".* FROM "posts"  app/controllers/posts_controller.rb:5
+    2.1ms     0.2ms  sql.active_record: SELECT "users".* FROM "users" WHERE "users"."id" = ?  app/views/posts/index.html.erb:3
+```
+
+Both commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
 
 ## Configuration
 
