@@ -2,7 +2,6 @@
 
 require "json"
 require "optparse"
-require "time"
 require_relative "local_spans"
 require_relative "output"
 
@@ -60,20 +59,17 @@ module Flare
       spans = storage.spans_for_trace(@trace_id)
       props = root[:properties]
 
-      {
-        trace_id: @trace_id,
-        name: root[:name],
+      request_summary(root,
         method: props["http.request.method"] || props["http.method"],
         path: props["url.path"] || props["http.target"],
         status: props["http.response.status_code"] || props["http.status_code"],
-        duration_ms: root[:duration_ms].round(1),
-        queries: storage.count_queries_by_trace([@trace_id]).fetch(@trace_id, 0),
         controller: props["code.namespace"],
         action: props["code.function"],
-        started_at: Time.at(root[:start_timestamp] / 1_000_000_000r).iso8601(3),
-        exceptions: spans.flat_map { |span| exceptions(span) },
-        spans: spans.reject { |span| span[:id] == root[:id] }.map { |span| timeline_entry(span, root) },
-      }
+        queries: storage.count_queries_by_trace([@trace_id]).fetch(@trace_id, 0)).merge(
+          name: root[:name],
+          exceptions: spans.flat_map { |span| exceptions(span) },
+          spans: spans.reject { |span| span[:id] == root[:id] }.map { |span| timeline_entry(span, root) },
+        )
     end
 
     def exceptions(span)
@@ -114,9 +110,8 @@ module Flare
     end
 
     def print_request(request)
-      endpoint = [request[:controller], request[:action]].compact.join("#")
       title = request[:method] ? "#{request[:method]} #{request[:path]}" : request[:name]
-      puts [bold(title), request[:status], format("%.1fms", request[:duration_ms]), endpoint.empty? ? nil : endpoint].compact.join("  ")
+      puts [bold(title), request[:status], format("%.1fms", request[:duration_ms]), endpoint(request)].compact.join("  ")
       puts "Started #{request[:started_at]}  #{request[:queries]} queries"
 
       request[:exceptions].each do |exception|

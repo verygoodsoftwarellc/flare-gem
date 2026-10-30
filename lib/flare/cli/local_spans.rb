@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "time"
+
 module Flare
   module CLI
     # Read-only access to the local development spans database, for commands
@@ -10,6 +12,27 @@ module Flare
 
       def default_database_path
         File.join(Dir.pwd, "db", "flare.sqlite3")
+      end
+
+      # The fields `flare requests` and `flare request` both report, so their
+      # JSON stays in step.
+      def request_summary(span, method:, path:, status:, controller:, action:, queries:)
+        {
+          trace_id: span[:trace_id],
+          method: method,
+          path: path,
+          status: status,
+          duration_ms: span[:duration_ms].round(1),
+          queries: queries,
+          controller: controller,
+          action: action,
+          started_at: Time.at(span[:start_timestamp] / 1_000_000_000r).iso8601(3),
+        }
+      end
+
+      def endpoint(request)
+        name = [request[:controller], request[:action]].compact.join("#")
+        name unless name.empty?
       end
 
       def read_local_spans(database_path)

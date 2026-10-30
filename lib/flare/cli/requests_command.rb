@@ -2,7 +2,6 @@
 
 require "json"
 require "optparse"
-require "time"
 require_relative "local_spans"
 require_relative "output"
 
@@ -54,22 +53,12 @@ module Flare
       query_counts = storage.count_queries_by_trace(requests.map { |r| r[:trace_id] })
 
       requests.map do |r|
-        {
-          trace_id: r[:trace_id],
-          method: r[:http_method],
-          path: r[:http_target],
-          status: r[:http_status],
-          duration_ms: r[:duration_ms].round(1),
-          queries: query_counts.fetch(r[:trace_id], 0),
-          controller: r[:controller],
-          action: r[:action],
-          started_at: Time.at(r[:start_timestamp] / 1_000_000_000r).iso8601(3),
-        }
+        request_summary(r, method: r[:http_method], path: r[:http_target], status: r[:http_status],
+          controller: r[:controller], action: r[:action], queries: query_counts.fetch(r[:trace_id], 0))
       end
     end
 
     def format_row(request)
-      endpoint = [request[:controller], request[:action]].compact.join("#")
       [
         dim(request[:started_at]),
         request[:method].to_s.ljust(6),
@@ -77,7 +66,7 @@ module Flare
         format("%8.1fms", request[:duration_ms]),
         format("%4d queries", request[:queries]),
         request[:path],
-        endpoint.empty? ? nil : dim(endpoint),
+        endpoint(request)&.then { |name| dim(name) },
         dim(request[:trace_id]),
       ].compact.join("  ")
     end
