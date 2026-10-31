@@ -2,13 +2,14 @@
 
 require "json"
 require "optparse"
-require "time"
+require_relative "local_spans"
 require_relative "output"
 
 module Flare
   # Lists the most recent requests from the local development spans database,
   # so you (or a coding agent) can check a change without opening /flare.
   class RequestsCommand
+    include CLI::LocalSpans
     include CLI::Output
 
     DEFAULT_LIMIT = 10
@@ -16,7 +17,7 @@ module Flare
     def initialize(argv)
       @limit = DEFAULT_LIMIT
       @json = false
-      @database_path = File.join(Dir.pwd, "db", "flare.sqlite3")
+      @database_path = default_database_path
 
       OptionParser.new do |opts|
         opts.banner = "Usage: flare requests [options]"
@@ -34,18 +35,7 @@ module Flare
     end
 
     def run
-      unless File.exist?(@database_path)
-        $stderr.puts "No Flare spans database at #{@database_path}."
-        $stderr.puts "Start your app in development and make a request, or pass --db PATH."
-        exit 1
-      end
-
-      begin
-        requests = load_requests
-      rescue SQLite3::Exception => e
-        $stderr.puts "Could not read #{@database_path}: #{e.message}"
-        exit 1
-      end
+      requests = read_local_spans(@database_path) { |storage| load_requests(storage) }
 
       if @json
         puts JSON.pretty_generate(requests)
@@ -58,37 +48,17 @@ module Flare
 
     private
 
-    def load_requests
-      begin
-        require "sqlite3"
-      rescue LoadError
-        $stderr.puts "The sqlite3 gem is required. Add `gem \"sqlite3\"` to your Gemfile and run with `bundle exec`."
-        exit 1
-      end
-      require_relative "../storage"
-      require_relative "../storage/sqlite"
-
-      storage = Storage::SQLite.new(@database_path, readonly: true)
+    def load_requests(storage)
       requests = storage.list_requests(limit: @limit)
       query_counts = storage.count_queries_by_trace(requests.map { |r| r[:trace_id] })
 
       requests.map do |r|
-        {
-          trace_id: r[:trace_id],
-          method: r[:http_method],
-          path: r[:http_target],
-          status: r[:http_status],
-          duration_ms: r[:duration_ms].round(1),
-          queries: query_counts.fetch(r[:trace_id], 0),
-          controller: r[:controller],
-          action: r[:action],
-          started_at: Time.at(r[:start_timestamp] / 1_000_000_000r).iso8601(3),
-        }
+        request_summary(r, method: r[:http_method], path: r[:http_target], status: r[:http_status],
+          controller: r[:controller], action: r[:action], queries: query_counts.fetch(r[:trace_id], 0))
       end
     end
 
     def format_row(request)
-      endpoint = [request[:controller], request[:action]].compact.join("#")
       [
         dim(request[:started_at]),
         request[:method].to_s.ljust(6),
@@ -96,7 +66,7 @@ module Flare
         format("%8.1fms", request[:duration_ms]),
         format("%4d queries", request[:queries]),
         request[:path],
-        endpoint.empty? ? nil : dim(endpoint),
+        endpoint(request)&.then { |name| dim(name) },
         dim(request[:trace_id]),
       ].compact.join("  ")
     end
