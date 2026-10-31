@@ -459,7 +459,7 @@ class StatusCommandTest < Minitest::Test
   def test_shows_default_url
     cmd = Flare::StatusCommand.new
     out, = capture_io { cmd.run }
-    assert_includes out, "https://flare.am"
+    assert_includes out, "https://ingest.flare.am (default)"
   end
 end
 

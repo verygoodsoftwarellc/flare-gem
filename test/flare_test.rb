@@ -17,6 +17,13 @@ class TestFlare < Minitest::Test
     assert_equal 10_000, config.max_spans
   end
 
+  def test_default_url_is_the_ingest_service
+    previous = ENV.delete("FLARE_URL")
+    assert_equal "https://ingest.flare.am", Flare::Configuration.new.url
+  ensure
+    ENV["FLARE_URL"] = previous if previous
+  end
+
   def test_tracing_submission_requires_tracing_endpoint_and_key
     config = Flare::Configuration.new
     config.tracing_enabled = true

@@ -1024,6 +1024,29 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "POST /api/metrics", key.target
   end
 
+  def test_http_default_config_allows_ingest_service
+    config = Flare::HttpMetricsConfig::DEFAULT
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)
+
+    span = MockSpan.new(
+      kind: :client,
+      parent_span_id: "abc123",
+      attributes: {
+        "http.method" => "POST",
+        "http.host" => "ingest.flare.am",
+        "http.target" => "/api/metrics",
+        "http.status_code" => 202
+      },
+      start_ns: 0,
+      end_ns: 100_000_000
+    )
+
+    processor.on_end(span)
+
+    key = @storage.drain.keys.first
+    assert_equal "POST /api/metrics", key.target
+  end
+
   def test_http_default_config_allows_flippercloud_adapter
     config = Flare::HttpMetricsConfig::DEFAULT
     processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: config)

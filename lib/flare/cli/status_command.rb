@@ -14,7 +14,7 @@ module Flare
       puts bold("Environment")
       puts "  RAILS_ENV:    #{ENV.fetch("RAILS_ENV", dim("not set"))}"
       puts "  FLARE_KEY:  #{key_status}"
-      puts "  FLARE_URL:  #{ENV.fetch("FLARE_URL", dim("https://flare.am (default)"))}"
+      puts "  FLARE_URL:  #{ENV.fetch("FLARE_URL", dim("#{Configuration::DEFAULT_URL} (default)"))}"
       puts
 
       puts bold("Files")
