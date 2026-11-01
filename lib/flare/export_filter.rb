@@ -68,13 +68,14 @@ module Flare
       (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
       |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
       |(?:
-        (?<quote>\\?["'])(?<quoted_key>[\w.\-\[\]%]++)\k<quote>\]?
+        (?<!\\)\\*+(?<quote>["'])(?<quoted_key>[\w.\-\[\]%]++)\\*+\k<quote>\]?
         |(?<![\w.\-\[\]%])(?<key>[\w.\-\[\]%]++)
       )\s*+(?:=>|=|:)\s*+
     }xi
     # A value longer than this is masked rather than judged on part of it.
     VALUE_WINDOW = 256
     VALUE = /\A[^\s&;,]*+/
+    QUOTED_VALUE = /\A\\*+(?:["']|\z)/
     NESTED_VALUE = %r{=|%3d|//|%2f%2f|@|%40}i
 
     class << self
@@ -256,7 +257,7 @@ module Flare
     # it. Otherwise the line ends it, which covers multi-word values like cookie
     # lists.
     def sensitive_value_end(text, position)
-      return text.length if text[position] == '"' || text[position] == "'"
+      return text.length if QUOTED_VALUE.match?(text[position, VALUE_WINDOW])
 
       text.index("\n", position) || text.length
     end
