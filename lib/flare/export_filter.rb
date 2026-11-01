@@ -67,9 +67,9 @@ module Flare
     TEXT_TOKEN = %r{
       (?<!\w)
       (?:
-        (?<url>(?:[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
+        (?<url>(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
         |(?<auth>(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
-        |(?<quote>["']?)(?<key>[\w.\-\[\]%]++)\k<quote>\s*+(?:=>|=|:)\s*+
+        |(?<![.\-\[\]%])(?<quote>["']?)(?<key>[\w.\-\[\]%]++)\k<quote>\s*+(?:=>|=|:)\s*+
       )
     }xi
     # A value longer than this is masked rather than judged on part of it.

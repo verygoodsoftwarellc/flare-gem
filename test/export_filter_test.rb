@@ -185,7 +185,7 @@ class ExportFilterTest < Minitest::Test
   end
 
   def test_pairs_are_found_after_any_punctuation_and_in_sql_looking_text
-    ["GET /token=hunter2", "foo::token=hunter2", "foo+token=hunter2", "auth.Bearer hunter2", "DROP token=hunter2", "SHOW password: hunter2", "CALL secret=hunter2"].each do |value|
+    ["x.token=hunter2", ".token=hunter2", "-token=hunter2", "a.Bearer hunter2", "x.//u:hunter2@h", "GET /token=hunter2", "foo::token=hunter2", "foo+token=hunter2", "auth.Bearer hunter2", "DROP token=hunter2", "SHOW password: hunter2", "CALL secret=hunter2"].each do |value|
       refute_includes filtered("note", value), "hunter2", value
       refute_includes @filter.name(value), "hunter2", value
     end
@@ -201,7 +201,7 @@ class ExportFilterTest < Minitest::Test
   end
 
   def test_scanning_text_stays_bounded
-    ["a" * 100_000, "a:" * 100_000, "a=1 " * 30_000, "a." * 50_000, "https://" * 10_000, "." * 100_000].each do |value|
+    ["a" * 100_000, "a:" * 100_000, "a=1 " * 30_000, "a." * 50_000, "https://" * 10_000, "." * 100_000, "-" * 100_000, "%" * 100_000, "[" * 100_000, "a-" * 50_000, "a+" * 50_000].each do |value|
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       filtered("note", value)
       assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1, value[0, 10]
