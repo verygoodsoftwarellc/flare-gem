@@ -153,6 +153,8 @@ Tests use Minitest. The test helper loads core library classes directly without 
 - `lib/flare/metric_storage.rb` - thread-safe in-memory metric aggregation
 - `lib/flare/metric_flusher.rb` - background timer that drains and submits metrics
 - `lib/flare/metric_submitter.rb` - HTTP client for posting metrics to flare-web
+- `lib/flare/export_filter.rb` - filter_parameters and SQL masking for exported traces
+- `lib/flare/sql_mask.rb` - one-pass scan that takes the values out of a SQL statement
 - `lib/flare/source_location.rb` - finds app code location that triggered a span
 - `app/` - Rails engine controllers/views for the dashboard UI
 - `config/routes.rb` - engine routes (requests, jobs, spans by category)
