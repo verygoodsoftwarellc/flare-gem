@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "optparse"
 require_relative "local_spans"
 require_relative "output"
 
@@ -16,23 +15,13 @@ module Flare
     USAGE = "Usage: flare request <trace_id> [options]"
 
     def initialize(argv)
-      @json = false
-      @database_path = default_database_path
-
-      arguments = OptionParser.new do |opts|
-        opts.banner = USAGE
-        opts.on("--json", "Print JSON instead of text") { @json = true }
-        opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
-      end.parse!(argv)
+      arguments = parse_options(argv, banner: USAGE)
 
       unless arguments.size == 1
         $stderr.puts USAGE
         exit 1
       end
       @trace_id = arguments.first
-    rescue OptionParser::ParseError => e
-      $stderr.puts e.message
-      exit 1
     end
 
     def run
@@ -89,7 +78,7 @@ module Flare
         offset_ms: ((span[:start_timestamp] - root[:start_timestamp]) / 1_000_000.0).round(1),
         duration_ms: span[:duration_ms].round(1),
         detail: detail(props),
-        source: source(props),
+        source: source_location(props),
       }
     end
 
@@ -103,15 +92,9 @@ module Flare
       props["http.url"] || props["url.full"]
     end
 
-    def source(props)
-      return unless props["code.filepath"]
-
-      [props["code.filepath"], props["code.lineno"]].compact.join(":")
-    end
-
     def print_request(request)
       title = request[:method] ? "#{request[:method]} #{request[:path]}" : request[:name]
-      puts [bold(title), request[:status], format("%.1fms", request[:duration_ms]), endpoint(request)].compact.join("  ")
+      puts request_heading(request, title)
       puts "Started #{request[:started_at]}  #{request[:queries]} queries"
 
       request[:exceptions].each do |exception|

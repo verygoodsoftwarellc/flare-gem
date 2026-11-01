@@ -63,6 +63,33 @@ class StorageTest < Minitest::Test
     end
   end
 
+  def test_spans_for_trace_batches_ids_under_old_sqlite_bind_limits
+    with_storage do |storage, path|
+      db = SQLite3::Database.new(path)
+      db.transaction do
+        1_200.times do |i|
+          db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('s', 'internal', ?, 't', 'p', ?, ?, 'now', 'now')", ["s#{i}", i, i])
+        end
+      end
+      last_id = db.last_insert_row_id
+      db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES ('k', '\"v\"', 0, 'Flare::Span', ?, 'now', 'now')", [last_id])
+      db.execute("INSERT INTO flare_events (name, span_id, created_at, updated_at) VALUES ('e', ?, 'now', 'now')", [last_id])
+      db.close
+      bind_counts = []
+      storage.define_singleton_method(:query_all) do |sql, values = []|
+        bind_counts << values.size
+        super(sql, values)
+      end
+
+      spans = storage.spans_for_trace("t")
+
+      assert_equal 1_200, spans.size
+      assert_equal({ "k" => "v" }, spans.last[:properties])
+      assert_equal ["e"], spans.last[:events].map { |event| event[:name] }
+      assert bind_counts.all? { |n| n <= 999 }, "bind counts #{bind_counts.inspect} exceed 999"
+    end
+  end
+
   private
 
   # Storage caches its connection per thread, so use a fresh thread to avoid

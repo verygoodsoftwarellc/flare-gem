@@ -62,6 +62,7 @@ flare doctor   # Check your setup for issues
 flare status   # Show current configuration
 flare requests # List recent requests from local development spans
 flare request  # Show one request's timeline from local development spans
+flare nplus1   # Find queries repeated within recent requests from local development spans
 ```
 
 `flare requests` reads the local spans database, so you or a coding agent can make a request and check its duration and query count without opening `/flare`:
@@ -84,7 +85,16 @@ Started 2026-10-27T20:14:03.412-04:00  12 queries
     2.1ms     0.2ms  sql.active_record: SELECT "users".* FROM "users" WHERE "users"."id" = ?  app/views/posts/index.html.erb:3
 ```
 
-Both commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
+`flare nplus1` checks recent requests for the same query running more than once, ignoring the values bound to it, and names the code that ran it. Add `--last N` to check more or fewer requests than the default 10:
+
+```bash
+$ bundle exec flare nplus1
+GET /posts  200  48.2ms  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
+  10x     2.3ms  SELECT "users".* FROM "users" WHERE "users"."id" = ?
+     10x  app/views/posts/index.html.erb:3
+```
+
+All three commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
 
 ## Configuration
 
