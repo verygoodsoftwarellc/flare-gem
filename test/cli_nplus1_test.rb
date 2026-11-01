@@ -176,20 +176,4 @@ class CLINplus1Test < Minitest::Test
       assert_match(/nplus1\s+Find queries repeated/, out)
     end
   end
-
-  private
-
-  def insert_root(db, trace, path, at: Time.now)
-    root = insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: 10_000_000, at: at, properties: {
-      "http.method" => "GET", "http.target" => path, "http.status_code" => 200,
-      "code.namespace" => "PostsController", "code.function" => "index",
-    })
-    root.to_s
-  end
-
-  def insert_query(db, trace, root, statement, ms: 1, name: "Post Load", file: nil, line: nil)
-    properties = { "db.statement" => statement, "name" => name }.compact
-    properties.merge!("code.filepath" => file, "code.lineno" => line) if file
-    insert_span(db, trace: trace, name: "sql.active_record", kind: "internal", parent: root, ns: (ms * 1_000_000).to_i, at: Time.now, properties: properties)
-  end
 end

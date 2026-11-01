@@ -18,12 +18,10 @@ module Flare
     # matched by their text.
     IGNORED_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
-    def initialize(argv)
+    def run(argv)
       parse_options(argv, banner: "Usage: flare nplus1 [options]", last_help: "Number of requests to check")
-    end
 
-    def run
-      requests = read_local_spans(@database_path) { |storage| load_requests(storage) }
+      requests = read_local_spans(@database_path) { |storage| load_requests(storage, @limit) }
 
       if @json
         puts JSON.pretty_generate(requests)
@@ -34,8 +32,8 @@ module Flare
       end
     end
 
-    def load_requests(storage)
-      recent_requests(storage, @limit).filter_map do |request|
+    def load_requests(storage, limit)
+      recent_requests(storage, limit).filter_map do |request|
         repeated = repeated_queries(storage.spans_for_trace(request[:trace_id]))
         request.merge(repeated: repeated) if repeated.any?
       end

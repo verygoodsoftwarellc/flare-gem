@@ -24,8 +24,12 @@ module CLISpansSupport
     Dir.mktmpdir { |dir| yield File.realpath(dir) }
   end
 
-  def flare(dir, *args)
-    Open3.capture3(RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args, chdir: dir)
+  def flare_command(*args)
+    [RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args]
+  end
+
+  def flare(dir, *args, **options)
+    Open3.capture3(*flare_command(*args), chdir: dir, **options)
   end
 
   def create_database(dir, relative = "db/flare.sqlite3")
@@ -43,6 +47,20 @@ module CLISpansSupport
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     SQL
     db.last_insert_row_id.tap { |id| insert_properties(db, "Flare::Span", id, properties, stamp) }
+  end
+
+  def insert_root(db, trace, path, at: Time.now)
+    root = insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: 10_000_000, at: at, properties: {
+      "http.method" => "GET", "http.target" => path, "http.status_code" => 200,
+      "code.namespace" => "PostsController", "code.function" => "index",
+    })
+    root.to_s
+  end
+
+  def insert_query(db, trace, root, statement, ms: 1, name: "Post Load", file: nil, line: nil)
+    properties = { "db.statement" => statement, "name" => name }.compact
+    properties.merge!("code.filepath" => file, "code.lineno" => line) if file
+    insert_span(db, trace: trace, name: "sql.active_record", kind: "internal", parent: root, ns: (ms * 1_000_000).to_i, at: Time.now, properties: properties)
   end
 
   def insert_properties(db, owner_type, owner_id, properties, stamp)

@@ -35,10 +35,10 @@ module Flare
         RequestsCommand.new(argv.drop(1)).run
       when "request"
         require_relative "cli/request_command"
-        RequestCommand.new(argv.drop(1)).run
+        RequestCommand.new.run(argv.drop(1))
       when "nplus1"
         require_relative "cli/nplus1_command"
-        Nplus1Command.new(argv.drop(1)).run
+        Nplus1Command.new.run(argv.drop(1))
       when "mcp"
         require_relative "cli/mcp_command"
         McpCommand.new(argv.drop(1)).run

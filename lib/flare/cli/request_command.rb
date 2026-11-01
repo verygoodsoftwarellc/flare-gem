@@ -14,21 +14,19 @@ module Flare
 
     USAGE = "Usage: flare request <trace_id> [options]"
 
-    def initialize(argv)
+    def run(argv)
       arguments = parse_options(argv, banner: USAGE)
 
       unless arguments.size == 1
         $stderr.puts USAGE
         exit 1
       end
-      @trace_id = arguments.first
-    end
+      trace_id = arguments.first
 
-    def run
-      request = read_local_spans(@database_path) { |storage| load_request(storage) }
+      request = read_local_spans(@database_path) { |storage| load_request(storage, trace_id) }
 
       unless request
-        $stderr.puts "No request with trace id #{@trace_id}. Run `flare requests` to list recent ones."
+        $stderr.puts "No request with trace id #{trace_id}. Run `flare requests` to list recent ones."
         exit 1
       end
 
@@ -39,11 +37,11 @@ module Flare
       end
     end
 
-    def load_request(storage)
-      root = storage.find_request(@trace_id)
+    def load_request(storage, trace_id)
+      root = storage.find_request(trace_id)
       return unless root
 
-      spans = storage.spans_for_trace(@trace_id)
+      spans = storage.spans_for_trace(trace_id)
       props = root[:properties]
 
       request_summary(root,
@@ -52,7 +50,7 @@ module Flare
         status: props["http.response.status_code"] || props["http.status_code"],
         controller: props["code.namespace"],
         action: props["code.function"],
-        queries: storage.count_queries_by_trace([@trace_id]).fetch(@trace_id, 0)).merge(
+        queries: storage.count_queries_by_trace([trace_id]).fetch(trace_id, 0)).merge(
           name: root[:name],
           exceptions: spans.flat_map { |span| exceptions(span) },
           spans: spans.reject { |span| span[:id] == root[:id] }.map { |span| timeline_entry(span, root) },

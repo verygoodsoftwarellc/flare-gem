@@ -118,7 +118,7 @@ module Flare
       return error(id, INVALID_PARAMS, "Unknown tool: #{name}") unless TOOLS.any? { |tool| tool[:name] == name }
 
       arguments = params["arguments"].is_a?(Hash) ? params["arguments"] : {}
-      result(id, tool_text(JSON.pretty_generate(run_tool(name, arguments))))
+      result(id, tool_text(JSON.generate(run_tool(name, arguments))))
     rescue InvalidArgument, CLI::LocalSpans::Unavailable => e
       result(id, tool_text(e.message, is_error: true))
     rescue StandardError => e
@@ -132,12 +132,11 @@ module Flare
         open_local_spans(@database_path) { |storage| recent_requests(storage, last) }
       when "get_request"
         trace_id = trace_id_argument(arguments)
-        # "--" so an id can't be read as an option.
-        request = open_local_spans(@database_path) { |storage| RequestCommand.new(["--", trace_id]).load_request(storage) }
+        request = open_local_spans(@database_path) { |storage| RequestCommand.new.load_request(storage, trace_id) }
         request || raise(InvalidArgument, "No request with trace id #{trace_id}. Use list_requests to find recent ones.")
       when "find_n_plus_one"
         last = last_argument(arguments)
-        open_local_spans(@database_path) { |storage| Nplus1Command.new(["--last", last.to_s]).load_requests(storage) }
+        open_local_spans(@database_path) { |storage| Nplus1Command.new.load_requests(storage, last) }
       end
     end
 

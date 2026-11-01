@@ -104,7 +104,7 @@ class CLIMcpTest < Minitest::Test
       assert_equal(-32_601, unknown_method.dig("error", "code"))
       assert_equal(-32_602, unknown_tool.dig("error", "code"))
 
-      out, _err, status = Open3.capture3(*flare_command("mcp"), stdin_data: "not json\n[1]\n\n", chdir: dir)
+      out, _err, status = flare(dir, "mcp", stdin_data: "not json\n[1]\n\n")
       assert status.success?
       parse_error, not_a_message = out.lines.map { |line| JSON.parse(line) }
       assert_equal(-32_700, parse_error.dig("error", "code"))
@@ -168,26 +168,9 @@ class CLIMcpTest < Minitest::Test
     db.close
   end
 
-  def insert_root(db, trace, path, at: Time.now)
-    insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: 10_000_000, at: at, properties: {
-      "http.method" => "GET", "http.target" => path, "http.status_code" => 200,
-      "code.namespace" => "PostsController", "code.function" => "index",
-    })
-  end
-
-  def insert_query(db, trace, root, statement, ms:, file:, line:)
-    insert_span(db, trace: trace, name: "sqlite.query", kind: "client", parent: "p#{root}", ns: (ms * 1_000_000).to_i, at: Time.now, properties: {
-      "db.statement" => statement, "code.filepath" => file, "code.lineno" => line,
-    })
-  end
-
-  def flare_command(*args)
-    [RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args]
-  end
-
   def mcp(dir, *messages, args: [])
     input = messages.map { |message| JSON.generate(message.merge(jsonrpc: "2.0")) }.join("\n") + "\n"
-    out, err, status = Open3.capture3(*flare_command("mcp", *args), stdin_data: input, chdir: dir)
+    out, err, status = flare(dir, "mcp", *args, stdin_data: input)
     assert status.success?, err
     assert_empty err
     out.lines.map { |line| JSON.parse(line) }
