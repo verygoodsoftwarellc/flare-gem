@@ -270,9 +270,12 @@ module Flare
       puts "  3. Print token"
       print "Choose (1/2/3): "
 
-      choice = $stdin.gets&.strip
-
-      case choice
+      case $stdin.gets&.strip
+      when nil
+        # Closed stdin (a script, CI, a coding agent) can't answer. Asking again
+        # would never end and lose the token we just got, so show it.
+        puts
+        print_token(token)
       when "1"
         @saved_to_dotenv = true
         save_to_dotenv(token)
