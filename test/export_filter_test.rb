@@ -33,6 +33,7 @@ class ExportFilterTest < Minitest::Test
       assert_equal "https://x.test/a", filtered("app.note", text), text
     end
     refute_includes filtered("app.note", "see https://'hunter2'@x.test/a now"), "hunter2"
+    assert_equal "https://x.test/path'password=#{FILTERED}", filtered("app.note", "https://x.test/path'password=hunter2?x=@y")
     assert_equal "see https://x.test/a' and b@c", filtered("app.note", "see https://x.test/a' and b@c")
     assert_equal %q("https://x.test/a"), filtered("app.note", %q("https://x.test/a"))
   end

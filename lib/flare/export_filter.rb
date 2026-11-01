@@ -69,7 +69,7 @@ module Flare
     # One scan over free text, leftmost first, so what a URL contains is never read
     # as a key and value. key or quoted_key holds a pair's name.
     TEXT_TOKEN = %r{
-      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++(?:['"](?>[^\s<>@]{0,256})@[^\s<>]*+)?)
+      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//(?:[^\s'"<>/?#]*+['"](?>[^\s<>@/?#]{0,256})@[^\s<>]*+|[^\s'"<>]++))
       |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}))
       |(?:
         (?<!\\)\\*+(?<quote>["'])(?<quoted_key>[\w.\-\[\]%]++)\\*+\k<quote>\]?
