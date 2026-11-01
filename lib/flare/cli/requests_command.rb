@@ -35,7 +35,7 @@ module Flare
     end
 
     def run
-      requests = read_local_spans(@database_path) { |storage| load_requests(storage) }
+      requests = read_local_spans(@database_path) { |storage| recent_requests(storage, @limit) }
 
       if @json
         puts JSON.pretty_generate(requests)
@@ -47,16 +47,6 @@ module Flare
     end
 
     private
-
-    def load_requests(storage)
-      requests = storage.list_requests(limit: @limit)
-      query_counts = storage.count_queries_by_trace(requests.map { |r| r[:trace_id] })
-
-      requests.map do |r|
-        request_summary(r, method: r[:http_method], path: r[:http_target], status: r[:http_status],
-          controller: r[:controller], action: r[:action], queries: query_counts.fetch(r[:trace_id], 0))
-      end
-    end
 
     def format_row(request)
       [

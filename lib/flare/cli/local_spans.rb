@@ -14,8 +14,8 @@ module Flare
         File.join(Dir.pwd, "db", "flare.sqlite3")
       end
 
-      # The fields `flare requests` and `flare request` both report, so their
-      # JSON stays in step.
+      # The fields every request-reading command reports, so their JSON stays
+      # in step.
       def request_summary(span, method:, path:, status:, controller:, action:, queries:)
         {
           trace_id: span[:trace_id],
@@ -28,6 +28,22 @@ module Flare
           action: action,
           started_at: Time.at(span[:start_timestamp] / 1_000_000_000r).iso8601(3),
         }
+      end
+
+      def recent_requests(storage, limit)
+        requests = storage.list_requests(limit: limit)
+        query_counts = storage.count_queries_by_trace(requests.map { |r| r[:trace_id] })
+
+        requests.map do |r|
+          request_summary(r, method: r[:http_method], path: r[:http_target], status: r[:http_status],
+            controller: r[:controller], action: r[:action], queries: query_counts.fetch(r[:trace_id], 0))
+        end
+      end
+
+      def source_location(props)
+        return unless props["code.filepath"]
+
+        [props["code.filepath"], props["code.lineno"]].compact.join(":")
       end
 
       def endpoint(request)

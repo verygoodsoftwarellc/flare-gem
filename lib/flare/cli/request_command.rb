@@ -89,7 +89,7 @@ module Flare
         offset_ms: ((span[:start_timestamp] - root[:start_timestamp]) / 1_000_000.0).round(1),
         duration_ms: span[:duration_ms].round(1),
         detail: detail(props),
-        source: source(props),
+        source: source_location(props),
       }
     end
 
@@ -101,12 +101,6 @@ module Flare
       return identifier.to_s.sub(%r{\A.*/app/views/}, "") if identifier
 
       props["http.url"] || props["url.full"]
-    end
-
-    def source(props)
-      return unless props["code.filepath"]
-
-      [props["code.filepath"], props["code.lineno"]].compact.join(":")
     end
 
     def print_request(request)

@@ -10,6 +10,7 @@ module Flare
       "status" => "Show current Flare configuration",
       "requests" => "List recent requests from local development spans",
       "request" => "Show one request's timeline from local development spans",
+      "nplus1" => "Find queries repeated within recent requests from local development spans",
       "version" => "Print the Flare version",
       "help" => "Show this help message",
     }.freeze
@@ -34,6 +35,9 @@ module Flare
       when "request"
         require_relative "cli/request_command"
         RequestCommand.new(argv.drop(1)).run
+      when "nplus1"
+        require_relative "cli/nplus1_command"
+        Nplus1Command.new(argv.drop(1)).run
       when "version", "-v", "--version"
         puts "flare #{Flare::VERSION}"
       when "help", nil, "-h", "--help"
