@@ -65,12 +65,12 @@ module Flare
     # as a key and value. key holds a pair's name; separator ends where its value
     # starts.
     TEXT_TOKEN = %r{
-      (?<!\w)
-      (?:
-        (?<url>(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
-        |(?<auth>(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
-        |(?<![.\-\[\]%])(?<quote>["']?)(?<key>[\w.\-\[\]%]++)\k<quote>\s*+(?:=>|=|:)\s*+
-      )
+      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
+      |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
+      |(?:
+        (?<quote>["'])(?<quoted_key>[\w.\-\[\]%]++)\k<quote>
+        |(?<![\w.\-\[\]%])(?<key>[\w.\-\[\]%]++)
+      )\s*+(?:=>|=|:)\s*+
     }xi
     # A value longer than this is masked rather than judged on part of it.
     VALUE_WINDOW = 256
@@ -238,7 +238,7 @@ module Flare
         else
           out << match[0]
           value = text[position, VALUE_WINDOW + 1][VALUE]
-          next if value.length <= VALUE_WINDOW && pair_kept?(match[:key], value)
+          next if value.length <= VALUE_WINDOW && pair_kept?(match[:key] || match[:quoted_key], value)
 
           out << FILTERED
           position = sensitive_value_end(text, position)
