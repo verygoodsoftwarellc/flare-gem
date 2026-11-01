@@ -67,7 +67,7 @@ class CLINplus1Test < Minitest::Test
       out, err, status = flare(dir, "nplus1")
 
       assert status.success?, err
-      assert_equal "No repeated queries in the last 10 requests.\n", out
+      assert_equal "No repeated queries in recent requests (checked up to 10).\n", out
     end
   end
 

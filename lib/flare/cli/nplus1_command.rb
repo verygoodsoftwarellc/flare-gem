@@ -44,7 +44,7 @@ module Flare
       if @json
         puts JSON.pretty_generate(requests)
       elsif requests.empty?
-        puts "No repeated queries in the last #{@limit} requests."
+        puts "No repeated queries in recent requests (checked up to #{@limit})."
       else
         requests.each { |request| print_request(request) }
       end
