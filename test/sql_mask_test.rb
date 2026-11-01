@@ -144,6 +144,14 @@ class SqlMaskTest < Minitest::Test
     end
   end
 
+  def test_uuids_are_masked_whole
+    %w[cassandra postgresql mysql2 sqlite].each do |system|
+      assert_equal "WHERE id = ? AND a = ?", mask("WHERE id = 550e8400-e29b-41d4-a716-446655440000 AND a = 1", system), system
+      assert_equal "WHERE id = ?", mask("WHERE id = e29b8400-e29b-41d4-a716-446655440000", system), system
+    end
+    assert_equal "SELECT e29b8400 FROM t", mask("SELECT e29b8400 FROM t")
+  end
+
   def test_sql_system_classifier
     %w[postgresql postgis mysql2 trilogy mariadb sqlite sqlite3 cockroachdb sqlserver mssql oracle oracleenhanced db2].each { |system| assert Flare::SqlMask.sql_system?(system), system }
     ["redis", "mongodb", "memcached", "elasticsearch", "etcd", "nosql", "mystery"].each { |system| refute Flare::SqlMask.sql_system?(system), system }

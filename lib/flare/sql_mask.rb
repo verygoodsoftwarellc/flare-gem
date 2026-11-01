@@ -49,6 +49,7 @@ module Flare
     QUALIFIER = /#{DOUBLE_QUOTED.source}(?=\.(?:\*|\w|#{DOUBLE_QUOTED.source}))/n
 
     WORD = /[A-Za-z_\x80-\xff][\w$\x80-\xff]*+/n
+    UUID = /\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\b/n
     NUMBER = /\.?\d[\w.\x80-\xff]*+(?:(?<=[eE])[+-]\d++)?/n
     DOLLAR_OTHER = /\$\d*+/n
     DOLLAR_TAG = /\$(?:[A-Za-z_\x80-\xff][\w\x80-\xff]*+)?\$/n
@@ -63,7 +64,8 @@ module Flare
     # A run of tokens that are copied as they are, matched in one go because most
     # of a statement is this. It stops at anything that needs a decision: a quote,
     # a number, a $, a comment, or a word that may be a literal's prefix.
-    word = %q{[A-Za-z_\x80-\xff][\w$\x80-\xff]*+(?!')}
+    # A word that starts a UUID stops the run, so the whole UUID can be masked.
+    word = %q{(?!\h{8}-\h{4}-)[A-Za-z_\x80-\xff][\w$\x80-\xff]*+(?!')}
     other = %q{[^\w\x80-\xff'"`$#./-]++|\.(?!\d)|-(?!-)}
     backtick = "`[^`]*+(?:``[^`]*+)*+`"
     plain = "#{word}|#{other}|#{backtick}|/(?!\\*)"
@@ -114,7 +116,7 @@ module Flare
       until scanner.eos?
         if (run = scanner.scan(plain))
           out << run
-        elsif scanner.skip(NUMBER)
+        elsif scanner.skip(UUID) || scanner.skip(NUMBER)
           out << PLACEHOLDER
         elsif (word = scanner.scan(WORD))
           if LITERAL_PREFIX.match?(word)

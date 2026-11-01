@@ -53,15 +53,16 @@ class StoreStatementTest < Minitest::Test
   end
 
   def test_redis_pipelines_are_readable_and_bounded
-    assert_equal "MULTI\nSET y:?\nEXEC", redis("MULTI\nSET y:1 hunter2\nEXEC")
-    assert_equal "GET users:?", redis((1..50).map { |i| "GET users:#{i}" }.join("\n"))
-    many = (1..40).map { |i| "#{i.odd? ? "GET" : "SET"} users:#{i}" }.join("\n")
+    assert_equal "MULTI\nSET ?\nEXEC", redis("MULTI\nSET y:1 hunter2\nEXEC")
+    assert_equal "GET ?", redis((1..50).map { |i| "GET users:#{i}" }.join("\n"))
+    assert_equal "SET ?\nGET ?", redis("SET a:1 first\nGET secretword:hunter2")
+    many = (1..40).map { |i| "#{%w[GET SET INCR DEL TTL HGET HSET LPOP RPOP SADD SREM ZADD][i % 12]} users:#{i}" }.join("\n")
     assert_equal Flare::StoreStatement::MAX_REDIS_LINES + 1, redis(many).lines.size
     assert redis(many).end_with?("\n...")
   end
 
   def test_redis_lines_that_are_not_commands_are_dropped
-    assert_equal "SET a:?\nGET b:?", redis("SET a:1 first\nhunter2 second\nGET b:1")
+    assert_equal "SET ?\nGET ?", redis("SET a:1 first\nhunter2 second\nGET b:1")
     assert_equal "?", redis("hunter2 x\nnot a command")
   end
 

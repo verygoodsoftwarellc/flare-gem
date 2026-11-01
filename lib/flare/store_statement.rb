@@ -62,17 +62,18 @@ module Flare
 
     # The instrumentation joins a pipeline's commands with line breaks and a
     # command's arguments with spaces, so a line break can also sit inside a value.
-    # Only a pipeline is read line by line, and only lines that start with a Redis
-    # command count. A script can't be told from its arguments, so it's left out.
+    # Several lines therefore keep only command names, and only lines that start
+    # with one count. A script can't be told from its arguments, so it's left out.
     def redis(statement, pipelined: true)
       text = UTF8.scrub(statement.to_s.byteslice(0, MAX_REDIS_BYTES))
       lines = pipelined ? text.split("\n") : [text.split("\n", 2).first.to_s]
 
       shapes = []
       more = false
+      keep_key = lines.size == 1
       lines.each do |line|
         more = true if line == MORE
-        shape = redis_line(line)
+        shape = redis_line(line, keep_key)
         next if shape.nil? || shapes.last == shape
         break more = true if shapes.size == MAX_REDIS_LINES
 
@@ -85,13 +86,15 @@ module Flare
       shapes.join("\n")
     end
 
-    def redis_line(line)
+    def redis_line(line, keep_key)
       command, key = line.split(" ", 3)
       return unless command
 
       command = command.upcase
       if KEY_COMMANDS.include?(command)
-        key ? "#{command} #{masked_key(key)}" : command
+        return command unless key
+
+        "#{command} #{keep_key ? masked_key(key) : PLACEHOLDER}"
       elsif OTHER_COMMANDS.include?(command) || MODULE_COMMAND.match?(command)
         key ? "#{command} #{PLACEHOLDER}" : command
       end

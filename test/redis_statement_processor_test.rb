@@ -35,7 +35,7 @@ class RedisStatementProcessorTest < Minitest::Test
   def test_only_a_pipeline_is_read_line_by_line
     statement = "SET a:1 x\nGET secret:hunter2"
     assert_equal "SET a:?", statement_for("SET", { "db.system" => "redis", "db.statement" => statement })
-    assert_equal "SET a:?\nGET secret:?", statement_for("PIPELINED", { "db.system" => "redis", "db.statement" => statement })
+    assert_equal "SET ?\nGET ?", statement_for("PIPELINED", { "db.system" => "redis", "db.statement" => statement })
   end
 
   def test_leaves_other_spans_alone
