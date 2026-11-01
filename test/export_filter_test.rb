@@ -14,6 +14,36 @@ class ExportFilterTest < Minitest::Test
     @filter.attributes({ name => value, **others })[name]
   end
 
+  def test_statements_with_no_system_keep_only_a_command_word_unless_they_read_as_a_query
+    {
+      "SET session:hunter2 hunter2" => "SET ?",
+      "AUTH hunter2" => "AUTH ?",
+      "hunter2 hunter2" => "?",
+      "GRANT hunter2 TO bob" => "GRANT ?",
+      "SELECT a FROM t WHERE b = 'hunter2'" => "SELECT a FROM t WHERE b = ?",
+      "/* hunter2 */ DELETE FROM t WHERE a = 1" => "DELETE FROM t WHERE a = ?",
+      "(SELECT 'hunter2')" => "(SELECT ?)",
+    }.each do |statement, expected|
+      assert_equal expected, filtered("db.statement", statement), statement
+    end
+  end
+
+  def test_a_quoted_password_in_a_url_in_free_text
+    ["https://u:'hunter2'@x.test/a", %q(https://u:"hunter2"@x.test/a)].each do |text|
+      assert_equal "https://x.test/a", filtered("app.note", text), text
+    end
+    refute_includes filtered("app.note", "see https://'hunter2'@x.test/a now"), "hunter2"
+    assert_equal "see https://x.test/a' and b@c", filtered("app.note", "see https://x.test/a' and b@c")
+    assert_equal %q("https://x.test/a"), filtered("app.note", %q("https://x.test/a"))
+  end
+
+  def test_runs_of_quotes_after_urls_stay_fast
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    filtered("app.note", "//a'" * 4_000)
+    filtered("app.note", "//a' b " * 2_000)
+    assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1
+  end
+
   def test_url_attributes_under_old_and_new_names
     %w[http.url url.full].each do |name|
       assert_equal "https://x.test/a?password=#{FILTERED}&page=2",

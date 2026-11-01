@@ -51,6 +51,9 @@ module Flare
     STATEMENTS = %w[db.statement db.query.text db.query db.sql sql statement query].to_set.freeze
     # A leading comment or parenthesis counts, since a statement can start with one.
     SQL_TEXT = %r{\A[\s(]*(?:/\*|--|(?:select|insert|update|delete|replace|merge|with|set|create|alter|drop|truncate|grant|revoke|explain|describe|show|call|exec|execute|values|copy|pragma|vacuum|lock|begin|prepare)\b)}i
+    # With no system to go on, only statements that clearly read as queries get
+    # SQL masking, since it keeps bare words like the arguments of SET session:x y.
+    QUERY_TEXT = %r{\A[\s(]*(?:/\*|--|(?:select|insert|update|delete|replace|merge|with|explain|values)\b)}i
     STRUCTURED_TEXT = /\A\s*[{\[]/
 
     URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
@@ -66,8 +69,8 @@ module Flare
     # One scan over free text, leftmost first, so what a URL contains is never read
     # as a key and value. key or quoted_key holds a pair's name.
     TEXT_TOKEN = %r{
-      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
-      |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
+      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++(?:['"](?>[^\s<>@]{0,256})@[^\s<>]*+)?)
+      |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}))
       |(?:
         (?<!\\)\\*+(?<quote>["'])(?<quoted_key>[\w.\-\[\]%]++)\\*+\k<quote>\]?
         |(?<![\w.\-\[\]%])(?<key>[\w.\-\[\]%]++)
@@ -160,7 +163,7 @@ module Flare
       return StoreStatement.redis(text) if StoreStatement.redis_system?(system)
       return StoreStatement.mongo(text) if MONGO.match?(system.to_s)
 
-      unless SqlMask.sql_system?(system)
+      unless SqlMask.sql_system?(system) && (!system.to_s.empty? || QUERY_TEXT.match?(clean(text)))
         command = SqlMask.command_word(clean(text))
         return command ? "#{command} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
       end
