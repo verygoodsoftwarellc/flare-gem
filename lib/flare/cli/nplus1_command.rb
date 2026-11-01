@@ -34,14 +34,14 @@ module Flare
       end
     end
 
-    private
-
     def load_requests(storage)
       recent_requests(storage, @limit).filter_map do |request|
         repeated = repeated_queries(storage.spans_for_trace(request[:trace_id]))
         request.merge(repeated: repeated) if repeated.any?
       end
     end
+
+    private
 
     def repeated_queries(spans)
       spans.select { |span| query?(span) }

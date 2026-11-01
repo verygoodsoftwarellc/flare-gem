@@ -524,6 +524,14 @@ module Flare
         events_by_span
       end
 
+      def close_connection
+        key = connection_key
+        if db = Thread.current[key]
+          db.close rescue nil
+          Thread.current[key] = nil
+        end
+      end
+
       def prune(retention_hours:, max_spans:)
         cutoff = (Time.now - (retention_hours * 3600)).iso8601(6)
 
@@ -716,14 +724,6 @@ module Flare
           db = ::SQLite3::Database.new(@database_path, results_as_hash: true, readonly: @readonly)
           db.busy_timeout = 5000
           db
-        end
-      end
-
-      def close_connection
-        key = connection_key
-        if db = Thread.current[key]
-          db.close rescue nil
-          Thread.current[key] = nil
         end
       end
 

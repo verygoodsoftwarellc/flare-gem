@@ -63,6 +63,7 @@ flare status   # Show current configuration
 flare requests # List recent requests from local development spans
 flare request  # Show one request's timeline from local development spans
 flare nplus1   # Find queries repeated within recent requests from local development spans
+flare mcp      # Run a local MCP server over stdio for coding agents
 ```
 
 `flare requests` reads the local spans database, so you or a coding agent can make a request and check its duration and query count without opening `/flare`:
@@ -95,6 +96,12 @@ GET /posts  200  48.2ms  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
 ```
 
 All three commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
+
+`flare mcp` gives a coding agent the same three reads as MCP tools (`list_requests`, `get_request` and `find_n_plus_one`), with no account or token. It only reads the local spans database. Register it from your app's root, for example in Claude Code:
+
+```bash
+claude mcp add flare -- bundle exec flare mcp
+```
 
 ## Configuration
 

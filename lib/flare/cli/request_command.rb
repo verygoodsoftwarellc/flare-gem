@@ -39,8 +39,6 @@ module Flare
       end
     end
 
-    private
-
     def load_request(storage)
       root = storage.find_request(@trace_id)
       return unless root
@@ -60,6 +58,8 @@ module Flare
           spans: spans.reject { |span| span[:id] == root[:id] }.map { |span| timeline_entry(span, root) },
         )
     end
+
+    private
 
     def exceptions(span)
       span[:events].select { |event| event[:name] == "exception" }.map do |event|

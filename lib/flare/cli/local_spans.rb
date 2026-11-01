@@ -11,6 +11,8 @@ module Flare
     module LocalSpans
       DEFAULT_LIMIT = 10
 
+      class Unavailable < StandardError; end
+
       private
 
       # Parses the options these commands share, returning the other arguments.
@@ -82,27 +84,37 @@ module Flare
         name unless name.empty?
       end
 
-      def read_local_spans(database_path)
+      # For commands that end after one read: explains the problem and exits.
+      def read_local_spans(database_path, &block)
+        open_local_spans(database_path, &block)
+      rescue Unavailable => e
+        $stderr.puts e.message
+        exit 1
+      end
+
+      # Closes the connection afterward, so a long-running caller sees a
+      # database the app has since recreated.
+      def open_local_spans(database_path)
         unless File.exist?(database_path)
-          $stderr.puts "No Flare spans database at #{database_path}."
-          $stderr.puts "Start your app in development and make a request, or pass --db PATH."
-          exit 1
+          raise Unavailable, "No Flare spans database at #{database_path}.\n" \
+            "Start your app in development and make a request, or pass --db PATH."
         end
 
         begin
           require "sqlite3"
         rescue LoadError
-          $stderr.puts "The sqlite3 gem is required. Add `gem \"sqlite3\"` to your Gemfile and run with `bundle exec`."
-          exit 1
+          raise Unavailable, "The sqlite3 gem is required. Add `gem \"sqlite3\"` to your Gemfile and run with `bundle exec`."
         end
         require_relative "../storage"
         require_relative "../storage/sqlite"
 
+        storage = Storage::SQLite.new(database_path, readonly: true)
         begin
-          yield Storage::SQLite.new(database_path, readonly: true)
+          yield storage
         rescue SQLite3::Exception => e
-          $stderr.puts "Could not read #{database_path}: #{e.message}"
-          exit 1
+          raise Unavailable, "Could not read #{database_path}: #{e.message}"
+        ensure
+          storage.close_connection
         end
       end
     end
