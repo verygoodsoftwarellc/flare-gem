@@ -97,7 +97,7 @@ GET /posts  200  48.2ms  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
 
 All three commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
 
-`flare mcp` gives a coding agent the same three reads as MCP tools (`list_requests`, `get_request` and `find_n_plus_one`), with no account or token. It only reads the local spans database. Register it from your app's root, for example in Claude Code:
+`flare mcp` gives a coding agent the same three reads as MCP tools (`list_requests`, `get_request` and `find_n_plus_one`), with no account or token. It only reads the local spans database. Like `flare request` and `flare nplus1`, it reads queries with their values left out, and URLs without query strings. The `/flare` dashboard shows them in full. Register it from your app's root, for example in Claude Code:
 
 ```bash
 claude mcp add flare -- bundle exec flare mcp

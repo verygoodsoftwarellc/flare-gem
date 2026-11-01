@@ -57,19 +57,6 @@ module Flare
       !IGNORED_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
     end
 
-    # The statement with its values taken out, so one query run with different
-    # values reads as the same query.
-    def shape(statement)
-      statement.to_s
-        .gsub(%r{/\*.*?\*/}m, " ")
-        .gsub(/'(?:[^']|'')*'/, "?")
-        .gsub(/\$\d+/, "?")
-        .gsub(/\b\d+(?:\.\d+)?\b/, "?")
-        .gsub(/\bIN\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/i, "IN (?)")
-        .gsub(/\s+/, " ")
-        .strip
-    end
-
     def summarize(statement, queries)
       {
         statement: statement,

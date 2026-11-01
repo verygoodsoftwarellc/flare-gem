@@ -82,12 +82,12 @@ module Flare
 
     def detail(props)
       statement = props["db.statement"]
-      return statement.to_s.gsub(/\s+/, " ").strip if statement
+      return shape(statement) if statement
 
       identifier = props["identifier"]
       return identifier.to_s.sub(%r{\A.*/app/views/}, "") if identifier
 
-      props["http.url"] || props["url.full"]
+      without_query_string(props["http.url"] || props["url.full"])
     end
 
     def print_request(request)

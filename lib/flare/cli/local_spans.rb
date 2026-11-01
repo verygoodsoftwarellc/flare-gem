@@ -49,7 +49,7 @@ module Flare
         {
           trace_id: span[:trace_id],
           method: method,
-          path: path,
+          path: without_query_string(path),
           status: status,
           duration_ms: span[:duration_ms].round(1),
           queries: queries,
@@ -67,6 +67,23 @@ module Flare
           request_summary(r, method: r[:http_method], path: r[:http_target], status: r[:http_status],
             controller: r[:controller], action: r[:action], queries: query_counts.fetch(r[:trace_id], 0))
         end
+      end
+
+      # The statement with its values taken out, so one query run with different
+      # values reads as the same query.
+      def shape(statement)
+        statement.to_s
+          .gsub(%r{/\*.*?\*/}m, " ")
+          .gsub(/'(?:[^']|'')*'/, "?")
+          .gsub(/\$\d+/, "?")
+          .gsub(/\b\d+(?:\.\d+)?\b/, "?")
+          .gsub(/\bIN\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/i, "IN (?)")
+          .gsub(/\s+/, " ")
+          .strip
+      end
+
+      def without_query_string(url)
+        url&.to_s&.split("?", 2)&.first
       end
 
       def source_location(props)

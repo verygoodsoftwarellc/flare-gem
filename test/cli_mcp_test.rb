@@ -53,6 +53,24 @@ class CLIMcpTest < Minitest::Test
     end
   end
 
+  def test_requests_read_without_their_values
+    in_app do |dir|
+      db = create_database(dir)
+      root = insert_root(db, "t1", "/posts?page=2")
+      insert_query(db, "t1", root, "SELECT * FROM posts WHERE title = 'First' AND views > 10 AND id IN (1, 2)")
+      insert_span(db, trace: "t1", name: "HTTP GET", kind: "client", parent: root, ns: 1_000_000, at: Time.now,
+        properties: { "http.url" => "https://api.example.com/items?page=2" })
+      db.close
+
+      assert_equal "/posts", tool_data(dir, "list_requests").first["path"]
+
+      request = tool_data(dir, "get_request", trace_id: "t1")
+      assert_equal "/posts", request["path"]
+      assert_equal ["SELECT * FROM posts WHERE title = ? AND views > ? AND id IN (?)", "https://api.example.com/items"],
+        request["spans"].map { |span| span["detail"] }
+    end
+  end
+
   def test_last_limits_the_requests_read
     in_app do |dir|
       db = create_database(dir)
