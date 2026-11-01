@@ -33,8 +33,12 @@ module Flare
 
     COMMAND_WORD = /\A\s*([A-Za-z][A-Za-z_.]{0,31})(?=\s|\z)/
     OPERATION_WORD = /\A[A-Za-z][A-Za-z_.]{0,31}\z/
-    NOT_A_TABLE = /\bDISTINCT\s+FROM\s+\z/ni
-    NAME_POSITION = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+|\.)\z/ni
+    # Decided from a short tail of the output, so anything spaced too widely to see
+    # in it isn't a name. FROM counts only with the word before it in view, because
+    # IS DISTINCT FROM takes a value.
+    NAME_POSITION = /(?:\b(?:JOIN|INTO|UPDATE|TABLE)\s{1,8}|\.)\z/ni
+    FROM_POSITION = /(\S+)\s{1,8}FROM\s{1,8}\z/ni
+    DISTINCT_WORD = /DISTINCT\z/ni
     DOUBLE_QUOTED = /"[^"]*+(?:""[^"]*+)*+"/n
     QUALIFIER = /#{DOUBLE_QUOTED.source}(?=\.(?:\*|\w|#{DOUBLE_QUOTED.source}))/n
 
@@ -149,7 +153,8 @@ module Flare
     # only be a name.
     def sqlite_name(scanner, out)
       tail = out.byteslice(-32, 32) || out
-      if NAME_POSITION.match?(tail) && !NOT_A_TABLE.match?(tail)
+      from = FROM_POSITION.match(tail)
+      if NAME_POSITION.match?(tail) || (from && !DISTINCT_WORD.match?(from[1]))
         scanner.scan(DOUBLE_QUOTED)
       else
         scanner.scan(QUALIFIER)
