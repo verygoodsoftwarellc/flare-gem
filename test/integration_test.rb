@@ -336,8 +336,8 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_jobs_sort_slowest_first
-    create_job_span(trace_id: "quick", job_class: "QuickJob")
     create_job_span(trace_id: "slow", job_class: "SlowJob")
+    create_job_span(trace_id: "quick", job_class: "QuickJob")
     set_duration("quick" => 1, "slow" => 900)
 
     get "/flare/jobs", { sort: "slowest" }
@@ -346,8 +346,8 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_span_lists_sort_slowest_first
-    create_query_span(trace_id: "quick", parent_span_id: "root", statement: "SELECT quick")
     create_query_span(trace_id: "slow", parent_span_id: "root", statement: "SELECT slow")
+    create_query_span(trace_id: "quick", parent_span_id: "root", statement: "SELECT quick")
     set_duration("quick" => 1, "slow" => 900)
 
     get "/flare/spans/queries", { sort: "slowest" }
@@ -356,8 +356,8 @@ class IntegrationTest < Minitest::Test
   end
 
   def test_exceptions_sort_slowest_first
-    create_exception_span(trace_id: "quick", parent_span_id: "root", exception_message: "quick failure")
     create_exception_span(trace_id: "slow", parent_span_id: "root", exception_message: "slow failure")
+    create_exception_span(trace_id: "quick", parent_span_id: "root", exception_message: "quick failure")
     set_duration("quick" => 1, "slow" => 900)
 
     get "/flare/spans/exceptions", { sort: "slowest" }
