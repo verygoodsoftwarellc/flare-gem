@@ -13,10 +13,6 @@ module Flare
     include CLI::Output
 
     MINIMUM_REPEATS = 2
-    # What Active Record names its own bookkeeping, which repeats by design.
-    # Transaction statements from elsewhere have no name, so they're also
-    # matched by their text.
-    IGNORED_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
     def initialize(argv)
       parse_options(argv, banner: "Usage: flare nplus1 [options]", last_help: "Number of requests to check")
@@ -56,7 +52,9 @@ module Flare
       statement = props["db.statement"]
       return false unless statement && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].downcase.include?(pattern) }
 
-      !IGNORED_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
+      # Active Record's bookkeeping repeats by design. Transaction statements
+      # from elsewhere have no name, so they're also matched by their text.
+      !Storage::SQLite::BOOKKEEPING_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
     end
 
     # The statement with its values taken out, so one query run with different
