@@ -45,6 +45,33 @@ class StorageTest < Minitest::Test
     end
   end
 
+  def test_queries_leave_out_active_record_bookkeeping
+    with_storage do |storage, path|
+      queries = {
+        'SELECT "posts".* FROM "posts"' => "Post Load",
+        "BEGIN immediate TRANSACTION" => "TRANSACTION",
+        "COMMIT TRANSACTION" => "TRANSACTION",
+        "SAVEPOINT active_record_1" => "TRANSACTION",
+        'PRAGMA table_xinfo("posts")' => "SCHEMA",
+        "BEGIN" => nil,
+        "SELECT 1" => nil,
+      }
+      db = SQLite3::Database.new(path)
+      queries.each do |statement, query_name|
+        db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('sql.active_record', 'internal', ?, 't', 'p', 1, 2, 'now', 'now')", [statement])
+        span_id = db.last_insert_row_id
+        { "db.statement" => statement, "name" => query_name }.compact.each do |key, value|
+          db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES (?, ?, 0, 'Flare::Span', ?, 'now', 'now')", [key, JSON.generate(value), span_id])
+        end
+      end
+      db.close
+
+      assert_equal({ "t" => 2 }, storage.count_queries_by_trace(["t"]))
+      assert_equal 2, storage.count_spans_by_category("queries")
+      assert_equal 2, storage.list_spans_by_category("queries").size
+    end
+  end
+
   def test_count_queries_by_trace_batches_trace_ids_under_old_sqlite_bind_limits
     with_storage do |storage, path|
       insert_span(path, "sql.active_record", Time.now)
