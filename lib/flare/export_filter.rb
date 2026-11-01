@@ -53,7 +53,7 @@ module Flare
     SQL_TEXT = %r{\A[\s(]*(?:/\*|--|(?:select|insert|update|delete|replace|merge|with|set|create|alter|drop|truncate|grant|revoke|explain|describe|show|call|exec|execute|values|copy|pragma|vacuum|lock|begin|prepare)\b)}i
     # With no system to go on, only statements that clearly read as queries get
     # SQL masking, since it keeps bare words like the arguments of SET session:x y.
-    QUERY_TEXT = %r{\A[\s(]*(?:/\*|--|(?:select|insert|update|delete|replace|merge|with|explain|values)\b)}i
+    QUERY_TEXT = /\A[\s(]*(?:select|insert|update|delete|replace|merge|with|explain|values)\b/i
     STRUCTURED_TEXT = /\A\s*[{\[]/
 
     URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
@@ -69,7 +69,7 @@ module Flare
     # One scan over free text, leftmost first, so what a URL contains is never read
     # as a key and value. key or quoted_key holds a pair's name.
     TEXT_TOKEN = %r{
-      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//(?:[^\s'"<>/?#]*+['"](?>[^\s<>@/?#]{0,256})@[^\s<>]*+|[^\s'"<>]++))
+      (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]*+(?:['"](?>[^\s<>@]{0,256})@[^\s<>]*+)?)
       |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}))
       |(?:
         (?<!\\)\\*+(?<quote>["'])(?<quoted_key>[\w.\-\[\]%]++)\\*+\k<quote>\]?
@@ -163,13 +163,18 @@ module Flare
       return StoreStatement.redis(text) if StoreStatement.redis_system?(system)
       return StoreStatement.mongo(text) if MONGO.match?(system.to_s)
 
-      unless SqlMask.sql_system?(system) && (!system.to_s.empty? || QUERY_TEXT.match?(clean(text)))
-        command = SqlMask.command_word(clean(text))
-        return command ? "#{command} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
-      end
+      return command_only(clean(text)) unless SqlMask.sql_system?(system)
 
       masked = SqlMask.mask(text, system)
-      masked.empty? ? SqlMask::PLACEHOLDER : masked
+      return SqlMask::PLACEHOLDER if masked.empty?
+      return command_only(masked) if system.to_s.empty? && !QUERY_TEXT.match?(masked)
+
+      masked
+    end
+
+    def command_only(text)
+      command = SqlMask.command_word(text)
+      command ? "#{command} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
     end
 
     def url(text)
@@ -248,9 +253,12 @@ module Flare
       out << text[position..]
     end
 
+    # A quote with an @ after it can't be read as a URL's parts, so none of it is kept.
     def text_url(found)
       scheme = found[/\A[^:\/]+(?=:)/]
-      scheme && !param_kept?(scheme, found) ? FILTERED : url(found)
+      return FILTERED if scheme && !param_kept?(scheme, found)
+
+      found.match?(/['"]/) ? "#{scheme}#{":" if scheme}//#{FILTERED}" : url(found)
     end
 
     # A quoted value may hold escapes and line breaks, so it masks everything after

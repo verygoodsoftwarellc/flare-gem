@@ -23,17 +23,21 @@ class ExportFilterTest < Minitest::Test
       "SELECT a FROM t WHERE b = 'hunter2'" => "SELECT a FROM t WHERE b = ?",
       "/* hunter2 */ DELETE FROM t WHERE a = 1" => "DELETE FROM t WHERE a = ?",
       "(SELECT 'hunter2')" => "(SELECT ?)",
+      "/* hunter2 */ SET session:hunter2 hunter2" => "SET ?",
+      "-- hunter2\nAUTH hunter2" => "AUTH ?",
+      "/* hunter2" => "?",
     }.each do |statement, expected|
       assert_equal expected, filtered("db.statement", statement), statement
     end
   end
 
   def test_a_quoted_password_in_a_url_in_free_text
-    ["https://u:'hunter2'@x.test/a", %q(https://u:"hunter2"@x.test/a)].each do |text|
-      assert_equal "https://x.test/a", filtered("app.note", text), text
+    [
+      "https://u:'hunter2'@x.test/a", %q(https://u:"hunter2"@x.test/a), "https://'hunter2'@x.test/a",
+      "https://x.test/a'hunter2@y", "https://u:'a/hunter2'@x.test/a", "https://x.test/path'password=hunter2?x=@y",
+    ].each do |text|
+      assert_equal "https://#{FILTERED}", filtered("app.note", text), text
     end
-    refute_includes filtered("app.note", "see https://'hunter2'@x.test/a now"), "hunter2"
-    assert_equal "https://x.test/path'password=#{FILTERED}", filtered("app.note", "https://x.test/path'password=hunter2?x=@y")
     assert_equal "see https://x.test/a' and b@c", filtered("app.note", "see https://x.test/a' and b@c")
     assert_equal %q("https://x.test/a"), filtered("app.note", %q("https://x.test/a"))
   end
