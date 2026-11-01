@@ -82,7 +82,7 @@ module Flare
 
     def detail(props)
       statement = props["db.statement"]
-      return shape(statement) if statement
+      return shape(statement, props["db.system"]) if statement
 
       identifier = props["identifier"]
       return identifier.to_s.sub(%r{\A.*/app/views/}, "") if identifier

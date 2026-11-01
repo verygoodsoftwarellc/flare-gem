@@ -43,7 +43,7 @@ module Flare
 
     def repeated_queries(spans)
       spans.select { |span| query?(span) }
-        .group_by { |span| shape(span[:properties]["db.statement"]) }
+        .group_by { |span| shape(span[:properties]["db.statement"], span[:properties]["db.system"]) }
         .select { |_, queries| queries.size >= MINIMUM_REPEATS }
         .map { |statement, queries| summarize(statement, queries) }
         .sort_by { |query| [-query[:count], -query[:total_ms]] }

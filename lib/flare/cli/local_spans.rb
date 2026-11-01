@@ -70,15 +70,20 @@ module Flare
       end
 
       # The statement with its values taken out, so one query run with different
-      # values reads as the same query.
-      def shape(statement)
-        statement.to_s
+      # values reads as the same query. Best effort over common SQL, for reading
+      # and grouping. Double quotes hold values only on MySQL; elsewhere they
+      # hold names.
+      def shape(statement, system = nil)
+        statement = statement.to_s
+        statement = statement.gsub(/"(?:[^"\\]|\\.|"")*"/, "?") if system.to_s.match?(/mysql|trilogy/i)
+
+        statement
           .gsub(%r{/\*.*?\*/}m, " ")
           .gsub(/\$((?:[A-Za-z_]\w*)?)\$.*?\$\1\$/m, "?")
           .gsub(/(?:\b[xben])?'(?:(?:[^'\\]|\\.|'')*'|(?:[^']|'')*')/i, "?")
           .gsub(/\$\d+/, "?")
           .gsub(/\b0x\h+\b/i, "?")
-          .gsub(/\b\d+(?:\.\d+)?\b/, "?")
+          .gsub(/\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/i, "?")
           .gsub(/\bIN\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/i, "IN (?)")
           .gsub(/\s+/, " ")
           .strip

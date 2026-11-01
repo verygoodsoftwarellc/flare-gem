@@ -85,6 +85,20 @@ class CLIMcpTest < Minitest::Test
     end
   end
 
+  def test_double_quotes_are_values_only_on_mysql
+    in_app do |dir|
+      db = create_database(dir)
+      root = insert_root(db, "t1", "/posts")
+      insert_span(db, trace: "t1", name: "sql.active_record", kind: "internal", parent: root, ns: 1_000_000, at: Time.now,
+        properties: { "db.statement" => 'SELECT * FROM `posts` WHERE title = "First" AND score = 1.5e3', "db.system" => "trilogy", "name" => "Post Load" })
+      insert_query(db, "t1", root, 'SELECT "posts".* FROM "posts"')
+      db.close
+
+      assert_equal ["SELECT * FROM `posts` WHERE title = ? AND score = ?", 'SELECT "posts".* FROM "posts"'],
+        tool_data(dir, "get_request", trace_id: "t1")["spans"].map { |span| span["detail"] }
+    end
+  end
+
   def test_last_limits_the_requests_read
     in_app do |dir|
       db = create_database(dir)
