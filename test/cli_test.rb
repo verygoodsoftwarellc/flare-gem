@@ -187,6 +187,34 @@ class SetupCommandGitignoreTest < Minitest::Test
   end
 end
 
+class SetupCommandTokenPromptTest < Minitest::Test
+  def test_closed_stdin_shows_the_token_instead_of_asking_forever
+    output = answering("") { Flare::SetupCommand.new(force: false).send(:save_token, "tok_123") }
+
+    assert_includes output, "FLARE_KEY=tok_123"
+    assert_equal 1, output.scan("Choose (1/2/3)").size
+    refute_includes output, "Invalid choice"
+  end
+
+  def test_an_invalid_choice_still_asks_again
+    output = answering("9\n3\n") { Flare::SetupCommand.new(force: false).send(:save_token, "tok_123") }
+
+    assert_includes output, "Invalid choice."
+    assert_includes output, "FLARE_KEY=tok_123"
+    assert_equal 2, output.scan("Choose (1/2/3)").size
+  end
+
+  private
+
+  def answering(input)
+    stdin = $stdin
+    $stdin = StringIO.new(input)
+    capture_io { yield }.first
+  ensure
+    $stdin = stdin
+  end
+end
+
 class SetupCommandDotenvTest < Minitest::Test
   def setup
     @dir = Dir.mktmpdir
