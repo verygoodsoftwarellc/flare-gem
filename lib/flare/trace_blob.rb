@@ -2,6 +2,7 @@
 
 require "time"
 
+require_relative "export_filter"
 require_relative "utf8"
 
 module Flare
@@ -35,6 +36,7 @@ module Flare
     def initialize(trace_id:, spans:)
       @trace_id = trace_id
       @spans    = spans
+      @filter   = ExportFilter.current
     end
 
     def to_h
@@ -86,17 +88,17 @@ module Flare
     end
 
     def root_name(root)
-      root&.name&.to_s&.slice(0, ROOT_NAME_LIMIT)
+      @filter.name(root&.name&.to_s)&.slice(0, ROOT_NAME_LIMIT)
     end
 
     def span_to_h(span)
       {
         "id"          => hexify(span.span_id),
         "parent_id"   => root?(span) ? nil : hexify(span.parent_span_id),
-        "name"        => span.name,
+        "name"        => @filter.name(span.name),
         "started_at"  => iso(span.start_timestamp),
         "duration_ms" => duration_ms(span),
-        "attributes"  => span.attributes || {}
+        "attributes"  => @filter.attributes(span.attributes)
       }
     end
 

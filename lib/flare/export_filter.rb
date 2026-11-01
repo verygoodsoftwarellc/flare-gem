@@ -1,0 +1,222 @@
+# frozen_string_literal: true
+
+require "active_support"
+require "active_support/parameter_filter"
+require "uri"
+
+require_relative "sql_mask"
+require_relative "utf8"
+
+module Flare
+  # Applies the app's filter_parameters and masks SQL values in span names and
+  # attributes before a trace leaves the process. Attributes that name the code
+  # or describe the request's shape are kept as they are, because the trace view
+  # and trace rules read them. Everything else is treated as possibly holding a
+  # value the app wouldn't want sent.
+  class ExportFilter
+    FILTERED = "[FILTERED]"
+    MAX_TEXT_BYTES = SqlMask::MAX_BYTES
+
+    # Applied even if the app's list is empty or was trimmed. Rails' generated
+    # list, plus the names credentials go by in URLs and headers.
+    DEFAULT_FILTERS = [
+      :passw, :email, :secret, :token, :_key, :crypt, :salt, :certificate, :otp, :ssn, :cvv, :cvc,
+      /api.?key/i, /authoriz/i, /oauth/i, /\Aauth\z/i, /cookie/i, /session/i, /credential/i, /signature/i,
+      /jwt/i, /bearer/i, /pwd/i, /\Apass\z/i, /\Akey\z/i, /\Asig\z/i, /\Acode\z/i
+    ].freeze
+
+    KEPT = %w[
+      name identifier layout count cache_hits record_count class_name
+      mailer action message_id hit exist store
+      http.method http.request.method http.status_code http.response.status_code
+      http.scheme url.scheme http.route http.user_agent user_agent.original
+      db.system db.system.name db.name db.namespace db.operation db.operation.name
+      db.sql.table db.collection.name db.redis.database_index
+      exception.type server.port net.peer.port
+    ].to_h { |name| [name, true] }.freeze
+    KEPT_PREFIX = /\A(?:code|messaging|flare|otel)\./
+
+    # What these hold can't be sorted into safe and unsafe parts: message bodies
+    # and recipients, job arguments, request and exception contents.
+    OPAQUE = %w[
+      to from cc bcc reply_to subject mail
+      args arguments params parameters headers cookies body payload request response env session
+      exception exception_object exception.message exception.stacktrace
+    ].to_h { |name| [name, true] }.freeze
+    OPAQUE_PREFIX = /\Aemail\./
+
+    STATEMENTS = %w[db.statement db.query.text db.query db.sql sql statement query].to_h { |name| [name, true] }.freeze
+    NON_SQL_SYSTEM = /redis|memcache|mongo|elasticsearch|dynamo/i
+    SQL_TEXT = /\A\s*(?:select|insert|update|delete|replace|merge|with|set|create|alter|grant)\b/i
+
+    URLS = %w[http.url url.full url.path http.target http.referer url.original].to_h { |name| [name, true] }.freeze
+    HOSTS = %w[http.host server.address net.peer.name].to_h { |name| [name, true] }.freeze
+    QUERY_STRING = "url.query"
+    CACHE_KEY = "key"
+    CACHE_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}(?=[\/:])/
+
+    URL_IN_TEXT = %r{[a-z][a-z0-9+.-]*://[^\s'"<>]+}i
+    URL_START = %r{\A((?:[a-z][a-z0-9+.-]*:)?//)([^/?#]*)(.*)\z}im
+    NUMERIC_PORT = /\A(?:\[[^\]]*\]|[^:]*)(?::\d*)?\z/
+    PAIR_IN_TEXT = /(["']?)([\w.\-\[\]%]+)\1(\s*(?:=>|=|:)\s*)("[^"]*"|'[^']*'|[^\s&;,]+)/
+    PAIR_MARKER = /=|:\s/
+    NESTED_VALUE = %r{=|%3d|://|%3a%2f%2f}i
+
+    class << self
+      # Built on use, and rebuilt if the list changes, because initializers and
+      # engines can add to filter_parameters at any point during boot.
+      def current
+        filters = app_filters
+        cached = @current
+        return cached.last if cached && cached.first == filters
+
+        filter = new(filters)
+        @current = [filters.dup.freeze, filter]
+        filter
+      end
+
+      private
+
+      def app_filters
+        return [] unless defined?(Rails) && Rails.respond_to?(:application) && Rails.application
+
+        Array(Rails.application.config.filter_parameters)
+      rescue StandardError
+        []
+      end
+    end
+
+    def initialize(filters = [])
+      @parameter_filter = ActiveSupport::ParameterFilter.new(DEFAULT_FILTERS + filters)
+    end
+
+    def attributes(attrs)
+      return {} if attrs.nil?
+
+      system = attrs["db.system"] || attrs["db.system.name"]
+      attrs.each_with_object({}) { |(name, value), out| out[name] = attribute(UTF8.scrub(name.to_s), value, system) }
+    end
+
+    # Span names are usually fixed labels, so most never go past the check.
+    def name(value)
+      return value unless value.is_a?(String) && value.match?(/[?'=@]|:\/\/|:\s/n)
+
+      contain { free_text(clean(value)) }
+    end
+
+    private
+
+    def attribute(name, value, system)
+      return value if KEPT.key?(name) || KEPT_PREFIX.match?(name)
+
+      contain do
+        next FILTERED if OPAQUE.key?(name) || OPAQUE_PREFIX.match?(name)
+        next filtered_by_name(name, value) unless value.is_a?(String) || value.is_a?(Array)
+        next value.map { |item| attribute(name, item, system) } if value.is_a?(Array)
+
+        text = clean(value)
+        if STATEMENTS.key?(name) then statement(text, system)
+        elsif URLS.key?(name) then url(text)
+        elsif HOSTS.key?(name) then text.sub(/\A.*@/m, "")
+        elsif name == QUERY_STRING then query_string(text)
+        elsif name == CACHE_KEY then cache_key(text)
+        elsif filtered_by_name(name, text) == FILTERED then FILTERED
+        else free_text(text)
+        end
+      end
+    end
+
+    # A value that can't be processed doesn't go out.
+    def contain
+      yield
+    rescue StandardError
+      FILTERED
+    end
+
+    def clean(value)
+      UTF8.scrub(value.bytesize > MAX_TEXT_BYTES ? value.byteslice(0, MAX_TEXT_BYTES) : value)
+    end
+
+    def filtered_by_name(name, value)
+      result = @parameter_filter.filter_param(name, value)
+      result.equal?(value) || result == value ? value : FILTERED
+    end
+
+    def statement(text, system)
+      if system && NON_SQL_SYSTEM.match?(system.to_s)
+        command = text[/\A\s*[A-Za-z_.]+/]
+        return command ? "#{command.strip} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
+      end
+
+      masked = SqlMask.mask(text, system)
+      masked.empty? ? SqlMask::PLACEHOLDER : masked
+    end
+
+    def url(text)
+      match = URL_START.match(text)
+      return without_fragment_and_query(text) unless match
+
+      scheme, authority, rest = match.captures
+      if authority.include?("@")
+        authority = authority.sub(/\A.*@/m, "")
+      elsif !NUMERIC_PORT.match?(authority)
+        return "#{scheme}#{FILTERED}"
+      end
+
+      "#{scheme}#{authority}#{without_fragment_and_query(rest)}"
+    end
+
+    def without_fragment_and_query(text)
+      base, query = text.split("#", 2).first.to_s.split("?", 2)
+      query ? "#{base}?#{query_string(query)}" : base.to_s
+    end
+
+    def query_string(text)
+      text.split(/([&;])/, -1).map { |part| part.match?(/\A[&;]?\z/) ? part : pair(part) }.join
+    end
+
+    def pair(part)
+      key, value = part.split("=", 2)
+      return FILTERED if value.nil?
+
+      decoded = URI.decode_www_form_component(key)
+      return "#{key}=#{FILTERED}" if NESTED_VALUE.match?(value) || !param_kept?(decoded, value)
+
+      part
+    rescue ArgumentError
+      FILTERED
+    end
+
+    # user[password]=x is checked as nested params, so filters written as
+    # "user.password" apply to it too.
+    def param_kept?(key, value)
+      return @parameter_filter.filter_param(key, value) == value unless key.include?("[")
+
+      path = key.split(/[\[\]]+/).reject(&:empty?)
+      nested = path.reverse.inject(value) { |inner, part| { part => inner } }
+      @parameter_filter.filter(nested) == nested
+    end
+
+    # Keeps the leading word of a key like views/posts/1-abc or rack:attack:1.2.3.4,
+    # so a trace still shows what kind of entry it was.
+    def cache_key(text)
+      namespace = text[CACHE_NAMESPACE]
+      namespace ? "#{namespace}#{text[namespace.length]}#{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
+    end
+
+    # Text with no known meaning: custom notification payloads, span names.
+    def free_text(text)
+      return SqlMask.mask(text) if SQL_TEXT.match?(text)
+
+      text = text.gsub(URL_IN_TEXT) { |found| url(found) } if text.include?("://")
+      text = text.gsub(PAIR_IN_TEXT) { |found| pair_in_text(found, $2, $3, $4) } if PAIR_MARKER.match?(text)
+      text
+    end
+
+    def pair_in_text(found, key, separator, value)
+      return found if value.start_with?(FILTERED) || param_kept?(key, value)
+
+      "#{key}#{separator}#{FILTERED}"
+    end
+  end
+end

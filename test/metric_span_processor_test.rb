@@ -11,6 +11,41 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
   end
 
+  def test_sql_metric_names_ignore_words_inside_values_and_comments
+    {
+      "SELECT 'x from hunter2' AS a FROM posts" => ["posts", "SELECT"],
+      "UPDATE posts SET title = 'y into hunter2' WHERE id = 1" => ["posts", "UPDATE"],
+      "/* hunter2 */ SELECT 1 FROM posts" => ["posts", "SELECT"],
+      "SELECT 'unterminated from hunter2" => ["primary", "SELECT"],
+    }.each do |statement, (target, operation)|
+      @processor.on_end(MockSpan.new(
+        kind: :internal,
+        parent_span_id: "abc",
+        attributes: { "db.system" => "sqlite", "db.name" => "primary", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+
+      key = @storage.drain.keys.first
+      assert_equal [target, operation], [key.target, key.operation], statement
+    end
+  end
+
+  def test_http_metric_drops_userinfo_and_fragment
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(
+      kind: :client,
+      parent_span_id: "abc",
+      attributes: { "http.request.method" => "GET", "http.host" => "user:hunter2@api.example.com", "http.target" => "/items#hunter2", "http.status_code" => 200 },
+      start_ns: 0,
+      end_ns: 1_000_000
+    ))
+
+    key = @storage.drain.keys.first
+    assert_equal "api.example.com", key.service
+    assert_equal "GET /items", key.target
+  end
+
   def test_web_request_creates_metric
     span = MockSpan.new(
       kind: :server,

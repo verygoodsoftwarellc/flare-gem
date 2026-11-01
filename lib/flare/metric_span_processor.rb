@@ -2,6 +2,7 @@
 
 require_relative "metric_key"
 require_relative "http_metrics_config"
+require_relative "sql_mask"
 
 module Flare
   TRANSACTION_NAME_ATTRIBUTE = "flare.transaction_name" unless const_defined?(:TRANSACTION_NAME_ATTRIBUTE)
@@ -177,13 +178,16 @@ module Flare
 
     def record_db_metric(span)
       db_system = span.attributes["db.system"].to_s
+      # Read the table and operation from the statement without its values, so
+      # the words in a string literal can't become the metric's name.
+      statement = SqlMask.mask(span.attributes["db.statement"], db_system) if db_system != "redis" && span.attributes["db.statement"]
 
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "db",
         service: db_system,
-        target: extract_db_target(span, db_system),
-        operation: extract_db_operation(span, db_system)
+        target: extract_db_target(span, db_system, statement),
+        operation: extract_db_operation(span, db_system, statement)
       )
 
       @storage.increment(
@@ -199,6 +203,7 @@ module Flare
              span.attributes["net.peer.name"] ||
              extract_host_from_url(span) ||
              "unknown"
+      host = host.to_s.sub(/\A.*@/, "")
 
       method = span.attributes["http.method"] ||
                span.attributes["http.request.method"] ||
@@ -304,7 +309,7 @@ module Flare
       end
     end
 
-    def extract_db_target(span, db_system)
+    def extract_db_target(span, db_system, statement)
       case db_system
       when "redis"
         # For Redis, use db.redis.namespace if available, or the database index
@@ -314,13 +319,13 @@ module Flare
       else
         # For SQL databases, prefer table name from attributes or parsed from SQL
         span.attributes["db.sql.table"] ||
-          extract_sql_table(span) ||
+          extract_sql_table(statement) ||
           span.attributes["db.name"] ||
           "unknown"
       end
     end
 
-    def extract_db_operation(span, db_system)
+    def extract_db_operation(span, db_system, statement)
       case db_system
       when "redis"
         span.attributes["db.operation"]&.to_s&.downcase ||
@@ -328,26 +333,22 @@ module Flare
           "command"
       else
         span.attributes["db.operation"]&.to_s&.upcase ||
-          extract_sql_operation(span) ||
+          extract_sql_operation(statement) ||
           "query"
       end
     end
 
-    def extract_sql_operation(span)
-      statement = span.attributes["db.statement"]
+    def extract_sql_operation(statement)
       return nil unless statement
 
       # Extract first word (SELECT, INSERT, UPDATE, DELETE, etc.)
-      statement.to_s.strip.split(/\s+/).first&.upcase
+      statement.split(" ", 2).first&.upcase
     end
 
-    def extract_sql_table(span)
-      statement = span.attributes["db.statement"]
+    def extract_sql_table(statement)
       return nil unless statement
 
-      sql = statement.to_s.strip
-
-      case sql
+      case statement
       when /\bFROM\s+[`"]?(\w+)[`"]?/i
         $1
       when /\bINTO\s+[`"]?(\w+)[`"]?/i
@@ -386,7 +387,7 @@ module Flare
       path = span.attributes["http.target"] ||
              span.attributes["url.path"] ||
              extract_path_from_url(span)
-      path&.to_s&.split("?")&.first || "/"
+      path&.to_s&.split(/[?#]/)&.first || "/"
     end
 
     # Normalize URL paths to prevent cardinality explosion.

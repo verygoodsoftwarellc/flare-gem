@@ -3,6 +3,8 @@
 require_relative "test_helper"
 require "flare/trace_blob"
 require "flare/sampler"
+require "open3"
+require "rbconfig"
 
 class TraceBlobTest < Minitest::Test
   SpanData = Struct.new(:name, :span_id, :parent_span_id, :start_timestamp, :end_timestamp, :attributes, :kind, keyword_init: true)
@@ -101,9 +103,76 @@ class TraceBlobTest < Minitest::Test
     assert_equal "GET /caf\u00e9", h["root_name"]
     assert_equal "GET /caf\u00e9", h["spans"].first["name"]
     assert_equal "curl\uFFFD", attrs["user_agent.original"]
-    assert_equal "SELECT '\uFFFD'", attrs["db.statement"]
+    assert_equal "SELECT ?", attrs["db.statement"]
     assert_equal ["ok", "\uFFFD"], attrs["tags"]
     assert_equal 1, attrs["app.\uFFFD"]
+  end
+
+  def test_filters_params_and_masks_sql_in_names_and_attributes
+    attrs = {
+      "url.query" => "password=hunter2&page=2",
+      "http.url" => "https://user:pw@api.example.com/items?api_key=abc&page=2#frag",
+      "db.system" => "postgresql",
+      "db.statement" => %q{SELECT "users".* FROM "users" WHERE token = 'abc' AND id = 42},
+      "code.namespace" => "UsersController",
+      "to" => "someone@example.com",
+      "subject" => "Your code is 1234",
+      "password" => "hunter2",
+      Flare::Sampler::RULE_ID_ATTRIBUTE => 9
+    }
+    spans = [span("GET /x?token=abc", id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 1, attrs: attrs, kind: :server)]
+
+    h = Flare::TraceBlob.build(trace_id: "\x01".b * 16, spans: spans).to_h
+    exported = h["spans"].first
+
+    assert_equal "GET /x?token=[FILTERED]", h["root_name"]
+    assert_equal "GET /x?token=[FILTERED]", exported["name"]
+    assert_equal({
+      "url.query" => "password=[FILTERED]&page=2",
+      "http.url" => "https://api.example.com/items?api_key=[FILTERED]&page=2",
+      "db.system" => "postgresql",
+      "db.statement" => 'SELECT "users".* FROM "users" WHERE token = ? AND id = ?',
+      "code.namespace" => "UsersController",
+      "to" => "[FILTERED]",
+      "subject" => "[FILTERED]",
+      "password" => "[FILTERED]",
+      Flare::Sampler::RULE_ID_ATTRIBUTE => 9
+    }, exported["attributes"])
+    assert_equal 9, h["trace_rule_id"]
+  end
+
+  def test_uses_the_apps_filter_parameters_including_ones_added_after_boot
+    script = <<~RUBY
+      require "rails"
+      require "action_controller/railtie"
+      $LOAD_PATH.unshift #{File.expand_path("../lib", __dir__).inspect}
+      require "flare/sampler"
+      require "flare/trace_blob"
+
+      class App < Rails::Application
+        config.eager_load = false
+        config.secret_key_base = "x" * 32
+        config.logger = Logger.new(File::NULL)
+        config.filter_parameters += [:zipcode]
+      end
+      App.initialize!
+
+      Span = Struct.new(:name, :span_id, :parent_span_id, :start_timestamp, :end_timestamp, :attributes, :kind, keyword_init: true)
+      export = lambda do
+        span = Span.new(name: "GET", span_id: "a".b * 8, start_timestamp: 0, end_timestamp: 1, kind: :server,
+          attributes: { "url.query" => "zipcode=1&plan=2&page=3" })
+        puts Flare::TraceBlob.build(trace_id: "a".b * 16, spans: [span]).to_h["spans"].first["attributes"]["url.query"]
+      end
+
+      export.call
+      Rails.application.config.filter_parameters << :plan
+      export.call
+    RUBY
+
+    output, status = Open3.capture2e(RbConfig.ruby, "-e", script)
+
+    assert status.success?, output
+    assert_equal ["zipcode=[FILTERED]&plan=2&page=3", "zipcode=[FILTERED]&plan=[FILTERED]&page=3"], output.lines.map(&:chomp).last(2)
   end
 
   def test_returns_nil_when_no_spans
