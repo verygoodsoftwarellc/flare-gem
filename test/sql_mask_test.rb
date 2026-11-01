@@ -100,9 +100,37 @@ class SqlMaskTest < Minitest::Test
     assert_equal "SELECT foo$bar$baz, ?", mask("SELECT foo$bar$baz, 'hunter2'")
   end
 
-  def test_double_quotes_are_names_except_on_mysql
-    %w[postgresql sqlite].each { |system| assert_equal 'SELECT "t"."a"', mask('SELECT "t"."a"', system) }
-    %w[mysql2 trilogy mysql mariadb].each { |system| assert_equal "SELECT ?", mask('SELECT "hunter2"', system) }
+  def test_double_quotes_are_names_only_on_systems_that_read_them_so
+    assert_equal 'SELECT "hunter2" FROM t', mask('SELECT "hunter2" FROM t', "postgresql")
+    %w[mysql2 trilogy mysql mariadb sqlite sqlserver mystery].each do |system|
+      assert_equal "SELECT ? FROM t", mask('SELECT "hunter2" FROM t', system), system
+    end
+  end
+
+  def test_sqlite_keeps_double_quoted_names_only_where_they_can_only_be_names
+    {
+      'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ? LIMIT ?' => 'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ? LIMIT ?',
+      'INSERT INTO "posts" ("title") VALUES (?)' => 'INSERT INTO "posts" (?) VALUES (?)',
+      'UPDATE "posts" SET "title" = ?' => 'UPDATE "posts" SET ? = ?',
+      'SELECT "x" FROM "a" JOIN "b"' => 'SELECT ? FROM "a" JOIN "b"',
+      'SELECT "x from hunter2" FROM t' => "SELECT ? FROM t",
+      'SELECT 1 WHERE a = "hunter2"' => "SELECT ? WHERE a = ?",
+      'SELECT a FROM t WHERE b = "hunter2"."c' => "SELECT a FROM t WHERE b = ?.?",
+    }.each { |sql, expected| assert_equal expected, mask(sql, "sqlite"), sql }
+  end
+
+  def test_sql_system_classifier
+    %w[postgresql postgis mysql2 trilogy mariadb sqlite sqlite3 cockroachdb sqlserver mssql oracle oracleenhanced db2 clickhouse].each { |system| assert Flare::SqlMask.sql_system?(system), system }
+    ["redis", "mongodb", "memcached", "elasticsearch", "cassandra", "etcd", "nosql", "mystery"].each { |system| refute Flare::SqlMask.sql_system?(system), system }
+    assert Flare::SqlMask.sql_system?(nil)
+    assert Flare::SqlMask.sql_system?("")
+  end
+
+  def test_command_word_accepts_only_a_plain_leading_word
+    assert_equal "AUTH", Flare::SqlMask.command_word(" AUTH hunter2")
+    assert_equal "ping", Flare::SqlMask.command_word("ping")
+    assert_equal "cluster.info", Flare::SqlMask.command_word("cluster.info x")
+    ["hunter2 x", %({"a":"b"}), "", nil, "a" * 40, "a:b c"].each { |value| assert_nil Flare::SqlMask.command_word(value), value.inspect }
   end
 
   def test_double_quotes_are_values_when_the_system_is_unknown

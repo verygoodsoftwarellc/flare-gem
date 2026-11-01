@@ -181,7 +181,7 @@ module Flare
       # Read the table and operation from the statement without its values, so
       # the words in a string literal can't become the metric's name.
       raw_statement = span.attributes["db.statement"]
-      statement = SqlMask.mask(raw_statement, db_system) if raw_statement && db_system != "redis"
+      statement = SqlMask.mask(raw_statement, db_system) if raw_statement && SqlMask.sql_system?(db_system)
 
       key = MetricKey.new(
         bucket: bucket_time(span),
@@ -311,14 +311,14 @@ module Flare
     end
 
     def extract_db_target(span, db_system, statement)
-      case db_system
-      when "redis"
+      if db_system == "redis"
         # For Redis, use db.redis.namespace if available, or the database index
         span.attributes["db.redis.database_index"]&.to_s ||
           span.attributes["db.name"] ||
           "default"
       else
-        # For SQL databases, prefer table name from attributes or parsed from SQL
+        # Prefer the table name from attributes. Only SQL statements are parsed
+        # for one; statement is nil for anything else.
         span.attributes["db.sql.table"] ||
           extract_sql_table(statement) ||
           span.attributes["db.name"] ||
@@ -327,15 +327,14 @@ module Flare
     end
 
     def extract_db_operation(span, db_system, statement)
-      case db_system
-      when "redis"
-        span.attributes["db.operation"]&.to_s&.downcase ||
-          span.name.to_s.split.last&.downcase ||
-          "command"
+      operation = SqlMask.command_word(span.attributes["db.operation"])
+
+      if db_system == "redis"
+        (operation || SqlMask.command_word(span.name.to_s.split.last))&.downcase || "query"
+      elsif SqlMask.sql_system?(db_system)
+        operation&.upcase || extract_sql_operation(statement) || "query"
       else
-        span.attributes["db.operation"]&.to_s&.upcase ||
-          extract_sql_operation(statement) ||
-          "query"
+        (operation || SqlMask.command_word(span.attributes["db.statement"]))&.upcase || "query"
       end
     end
 
@@ -410,8 +409,8 @@ module Flare
         when /\A[0-9a-f]{24}\z/i
           # MongoDB ObjectId: /items/507f1f77bcf86cd799439011 -> /items/:id
           ":id"
-        when /\A[0-9a-f]{32,}\z/i
-          # Long hex strings (tokens, hashes): -> :token
+        when /\A[0-9a-f]{32,}\z/i, /[^@]@/
+          # Long hex strings (tokens, hashes), or anything shaped like user@host: -> :token
           ":token"
         else
           segment

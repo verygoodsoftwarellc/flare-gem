@@ -31,7 +31,7 @@ module Flare
       mailer action message_id hit exist store
       http.method http.request.method http.status_code http.response.status_code
       http.scheme url.scheme http.route http.user_agent user_agent.original
-      db.system db.system.name db.name db.namespace db.operation db.operation.name
+      db.system db.system.name db.name db.namespace
       db.sql.table db.collection.name db.redis.database_index
       exception.type server.port net.peer.port
     ].to_set.freeze
@@ -46,20 +46,31 @@ module Flare
     ].to_set.freeze
     OPAQUE_PREFIX = /\Aemail\./
 
+    OPERATIONS = %w[db.operation db.operation.name].to_set.freeze
     STATEMENTS = %w[db.statement db.query.text db.query db.sql sql statement query].to_set.freeze
-    NON_SQL_SYSTEM = /redis|memcache|mongo|elasticsearch|dynamo/i
-    SQL_TEXT = /\A\s*(?:select|insert|update|delete|replace|merge|with|set|create|alter|grant)\b/i
+    # A leading comment or parenthesis counts, since a statement can start with one.
+    SQL_TEXT = %r{\A[\s(]*(?:/\*|--|(?:select|insert|update|delete|replace|merge|with|set|create|alter|drop|truncate|grant|revoke|explain|describe|show|call|exec|execute|values|copy|pragma|vacuum|lock|begin|prepare)\b)}i
+    STRUCTURED_TEXT = /\A\s*[{\[]/
 
     URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
     HOSTS = %w[http.host server.address net.peer.name].to_set.freeze
     CACHE_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}(?=[\/:])/
 
-    URL_IN_TEXT = %r{[a-z][a-z0-9+.-]*://[^\s'"<>]+}i
     URL_START = %r{\A((?:[a-z][a-z0-9+.-]*:)?//)([^/?#]*)(.*)\z}im
     NUMERIC_PORT = /\A(?:\[[^\]]*\]|[^:]*)(?::\d*)?\z/
-    PAIR_IN_TEXT = /(["']?)([\w.\-\[\]%]+)\1(\s*(?:=>|=|:)\s*)("[^"]*"|'[^']*'|[^\s&;,]+)/
-    PAIR_MARKER = /=|:\s/
-    NESTED_VALUE = %r{=|%3d|://|%3a%2f%2f}i
+    SCHEMELESS_USERINFO = %r{\A[^/?#]+@}
+    PATH_USERINFO = %r{(?<=/|\A)[^/@]+@[^/]*}
+
+    # One scan over free text, leftmost first, so what a URL contains is never read
+    # as a key and value. key holds a pair's name; separator ends where its value
+    # starts.
+    TEXT_TOKEN = %r{
+      (?<url>(?:[a-z][a-z0-9+.-]*:|(?<![\w:/]))//[^\s'"<>]+)
+      |(?<auth>\b(?:bearer\s+\S+|basic\s+[A-Za-z0-9+/=]{8,}))
+      |(?<quote>["']?)(?<key>[\w.\-\[\]%]+)\k<quote>(?<separator>\s*(?:=>|=|:)\s*)
+    }xi
+    VALUE = /\A[^\s&;,]*/
+    NESTED_VALUE = %r{=|%3d|//|%2f%2f|@|%40}i
 
     class << self
       # Built on use, and rebuilt if the list changes, because initializers and
@@ -122,6 +133,7 @@ module Flare
 
     def text_attribute(name, value, system)
       return statement(value, system) if STATEMENTS.include?(name)
+      return SqlMask.command_word(value) || SqlMask::PLACEHOLDER if OPERATIONS.include?(name)
 
       text = clean(value)
       if URLS.include?(name) then url(text)
@@ -138,9 +150,9 @@ module Flare
     end
 
     def statement(text, system)
-      if NON_SQL_SYSTEM.match?(system.to_s)
-        command = clean(text)[/\A\s*[A-Za-z_.]+/]
-        return command ? "#{command.strip} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
+      unless SqlMask.sql_system?(system)
+        command = SqlMask.command_word(clean(text))
+        return command ? "#{command} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
       end
 
       masked = SqlMask.mask(text, system)
@@ -149,7 +161,7 @@ module Flare
 
     def url(text)
       match = URL_START.match(text)
-      return without_fragment_and_query(text) unless match
+      return without_fragment_and_query(text.sub(SCHEMELESS_USERINFO, "")) unless match
 
       scheme, authority, rest = match.captures
       if authority.include?("@")
@@ -163,7 +175,8 @@ module Flare
 
     def without_fragment_and_query(text)
       base, query = text.split("#", 2).first.to_s.split("?", 2)
-      query ? "#{base}?#{query_string(query)}" : base.to_s
+      base = base.to_s.gsub(PATH_USERINFO, FILTERED)
+      query ? "#{base}?#{query_string(query)}" : base
     end
 
     def query_string(text)
@@ -201,20 +214,44 @@ module Flare
       namespace ? "#{namespace}#{text[namespace.length]}#{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
     end
 
-    # Text with no known meaning: custom notification payloads, span names.
+    # Text with no known meaning: custom notification payloads, span names. Masks
+    # more than it needs to rather than guess where a value ends.
     def free_text(text)
+      return FILTERED if STRUCTURED_TEXT.match?(text)
       return SqlMask.mask(text) if SQL_TEXT.match?(text)
 
-      text = text.gsub(URL_IN_TEXT) { |found| url(found) } if text.include?("://")
-      text = text.gsub(PAIR_IN_TEXT) { |found| pair_in_text(found, $2, $3, $4) } if PAIR_MARKER.match?(text)
-      text
+      out = +""
+      position = 0
+      while (match = TEXT_TOKEN.match(text, position))
+        out << text[position...match.begin(0)]
+        position = match.end(0)
+
+        if match[:url] then out << text_url(match[:url])
+        elsif match[:auth] then out << match[:auth].split(/\s+/).first << " " << FILTERED
+        else
+          out << match[0]
+          value = text[position..][VALUE]
+          next if pair_kept?(match[:key], value)
+
+          out << FILTERED
+          position = sensitive_value_end(text, position)
+        end
+      end
+      out << text[position..]
     end
 
-    def pair_in_text(found, key, separator, value)
-      # A value starting // is the rest of a URL that has already been through #url.
-      return found if value.start_with?(FILTERED, "//") || pair_kept?(key, value)
+    def text_url(found)
+      scheme = found[/\A[^:\/]+(?=:)/]
+      scheme && !param_kept?(scheme, found) ? FILTERED : url(found)
+    end
 
-      "#{key}#{separator}#{FILTERED}"
+    # A quoted value may hold escapes and line breaks, so it masks everything after
+    # it. Otherwise the line ends it, which covers multi-word values like cookie
+    # lists.
+    def sensitive_value_end(text, position)
+      return text.length if text[position] == '"' || text[position] == "'"
+
+      text.index("\n", position) || text.length
     end
   end
 end

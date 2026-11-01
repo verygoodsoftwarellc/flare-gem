@@ -18,10 +18,23 @@ module Flare
     MAX_BYTES = 16_384
     TRUNCATED = " ..."
 
-    # Double quotes hold values on MySQL and names elsewhere. MySQL also starts
-    # comments with #, which is an operator on Postgres. With no system to go on,
-    # read them as values.
-    MYSQL = /mysql|trilogy|maria/i
+    # Systems known to speak SQL. Anything else may not follow its quoting rules,
+    # so callers keep only a command word. No system at all is read as SQL, with
+    # every quote treated as a value.
+    SQL_SYSTEMS = /postgres|postgis|mysql|trilogy|maria|sqlite|cockroach|sqlserver|mssql|oracle|db2|clickhouse|redshift|timescale|tidb|vitess|snowflake|bigquery/i
+
+    # Double quotes hold names on these. On MySQL they hold values, and elsewhere
+    # they're treated as values too. SQLite reads them as values when no such
+    # column exists, so it keeps them only in places that can't hold a value.
+    # MySQL also starts comments with #, which is an operator on Postgres.
+    DOUBLE_QUOTED_NAMES = /postgres|postgis|cockroach|oracle|db2|redshift|timescale|snowflake/i
+    SQLITE = /sqlite/i
+    HASH_COMMENTS = /mysql|trilogy|maria|tidb|vitess/i
+
+    COMMAND_WORD = /\A\s*([A-Za-z][A-Za-z_.]{0,31})(?=\s|\z)/
+    NAME_POSITION = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE) |\.)\z/ni
+    DOUBLE_QUOTED = /"[^"]*+(?:""[^"]*+)*+"/n
+    QUALIFIER = /#{DOUBLE_QUOTED.source}(?=\.(?:\*|\w|#{DOUBLE_QUOTED.source}))/n
 
     WORD = /[A-Za-z_\x80-\xff][\w$\x80-\xff]*+/n
     NUMBER = /\.?\d[\w.\x80-\xff]*+(?:(?<=[eE])[+-]\d++)?/n
@@ -45,18 +58,26 @@ module Flare
       |-(?!-)
       |/(?!\*)
     PATTERN
-    PLAIN_MYSQL = Regexp.new("(?:#{plain})++", Regexp::NOENCODING)
-    PLAIN_OTHER = Regexp.new(%((?:#{plain}|"[^"]*+(?:""[^"]*+)*+"|#)++), Regexp::NOENCODING)
+    PLAIN = Regexp.new("(?:#{plain})++", Regexp::NOENCODING)
+    PLAIN_NAMES = Regexp.new(%((?:#{plain}|#{DOUBLE_QUOTED.source}|#)++), Regexp::NOENCODING)
+    PLAIN_HASH = Regexp.new("(?:#{plain}|#)++", Regexp::NOENCODING)
 
     module_function
+
+    def sql_system?(system)
+      system.to_s.empty? || SQL_SYSTEMS.match?(system.to_s)
+    end
+
+    # The first word of a statement, if it could be a command name. Nil otherwise.
+    def command_word(statement)
+      statement.to_s[COMMAND_WORD, 1]
+    end
 
     def mask(statement, system = nil)
       sql = statement.to_s.b
       truncated = sql.bytesize > MAX_BYTES
       sql = sql.byteslice(0, MAX_BYTES) if truncated
-      mysql = system.to_s.empty? || MYSQL.match?(system.to_s)
-
-      out = scan(StringScanner.new(sql), mysql)
+      out = scan(StringScanner.new(sql), system.to_s)
       out.tr!(OTHER_WHITESPACE, " ")
       out.squeeze!(" ")
       out.gsub!(IN_LIST, "IN (?)")
@@ -65,8 +86,12 @@ module Flare
       out.force_encoding(Encoding::UTF_8).scrub!
     end
 
-    def scan(scanner, mysql)
-      plain = mysql ? PLAIN_MYSQL : PLAIN_OTHER
+    def scan(scanner, system)
+      sqlite = SQLITE.match?(system)
+      plain = if DOUBLE_QUOTED_NAMES.match?(system) then PLAIN_NAMES
+      elsif system.empty? || HASH_COMMENTS.match?(system) then PLAIN
+      else PLAIN_HASH
+      end
       out = String.new(capacity: scanner.string.bytesize, encoding: Encoding::BINARY)
 
       until scanner.eos?
@@ -81,7 +106,7 @@ module Flare
             out << word
           end
         else
-          scan_delimiter(scanner, out, mysql)
+          scan_delimiter(scanner, out, plain, sqlite)
         end
       end
 
@@ -90,13 +115,16 @@ module Flare
 
     # Handles the delimiter the plain run stopped on. Giving up on the rest of the
     # statement means terminating the scanner, which ends the loop above.
-    def scan_delimiter(scanner, out, mysql)
+    def scan_delimiter(scanner, out, plain, sqlite)
       case scanner.peek(1)
       when "'"
         mask_literal(scanner, out)
       when '"'
-        # A closed name would have been part of the plain run on other systems.
-        mysql ? mask_literal(scanner, out) : mask_rest(scanner, out)
+        # A closed name would already be part of the plain run where quotes are names.
+        if plain == PLAIN_NAMES then mask_rest(scanner, out)
+        elsif sqlite && (name = sqlite_name(scanner, out)) then out << name
+        else mask_literal(scanner, out)
+        end
       when "`"
         # Likewise: only an unterminated name gets here.
         mask_rest(scanner, out)
@@ -104,10 +132,17 @@ module Flare
         mask_dollar(scanner, out)
       when "/"
         skip_comment(scanner, out)
-      else # -- or, on MySQL only, #
+      else # -- or, where it starts a comment, #
         scanner.skip(LINE_COMMENT)
         out << " "
       end
+    end
+
+    # A quoted word right after FROM and the like, or either side of a dot, can
+    # only be a name.
+    def sqlite_name(scanner, out)
+      tail = out.byteslice(-8, 8) || out
+      NAME_POSITION.match?(tail) ? scanner.scan(DOUBLE_QUOTED) : scanner.scan(QUALIFIER)
     end
 
     def mask_rest(scanner, out)
@@ -169,6 +204,6 @@ module Flare
       out << " "
     end
 
-    private_class_method :scan, :scan_delimiter, :mask_rest, :mask_literal, :mask_dollar, :skip_comment
+    private_class_method :scan, :scan_delimiter, :sqlite_name, :mask_rest, :mask_literal, :mask_dollar, :skip_comment
   end
 end

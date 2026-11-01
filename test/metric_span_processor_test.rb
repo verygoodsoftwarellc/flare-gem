@@ -31,6 +31,42 @@ class MetricSpanProcessorTest < Minitest::Test
     end
   end
 
+  def test_non_sql_systems_get_no_names_from_the_statement
+    {
+      { "db.system" => "cassandra", "db.statement" => "SELECT * FROM hunter2" } => ["unknown", "SELECT"],
+      { "db.system" => "couchbase", "db.statement" => %({"a":"hunter2"}) } => ["unknown", "query"],
+      { "db.system" => "mystery", "db.statement" => "hunter2 x" } => ["unknown", "query"],
+      { "db.system" => "etcd", "db.statement" => "PUT x", "db.operation" => "hunter2 x" } => ["unknown", "PUT"],
+      { "db.system" => "etcd", "db.operation" => "get" } => ["unknown", "GET"],
+      { "db.system" => "etcd", "db.name" => "main", "db.statement" => "GET x" } => ["main", "GET"],
+    }.each do |attributes, expected|
+      @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: attributes, start_ns: 0, end_ns: 1_000_000))
+
+      key = @storage.drain.keys.first
+      assert_equal expected, [key.target, key.operation], attributes.inspect
+    end
+  end
+
+  def test_sqlite_metric_names_survive_double_quoted_names_and_ignore_double_quoted_values
+    {
+      'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ?' => "posts",
+      'INSERT INTO "posts" ("a") VALUES (?)' => "posts",
+      'UPDATE "posts" SET "a" = ?' => "posts",
+      'SELECT "x from hunter2" AS a FROM posts' => "posts",
+    }.each do |statement, target|
+      @processor.on_end(MockSpan.new(kind: :internal, parent_span_id: "abc", attributes: { "db.system" => "sqlite", "db.statement" => statement }, start_ns: 0, end_ns: 1_000_000))
+
+      assert_equal target, @storage.drain.keys.first.target, statement
+    end
+  end
+
+  def test_http_metric_paths_drop_segments_with_userinfo
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.request.method" => "GET", "http.host" => "api.example.com", "http.target" => "/a/u:hunter2@b/@bob", "http.status_code" => 200 }, start_ns: 0, end_ns: 1_000_000))
+
+    assert_equal "GET /a/:token/@bob", @storage.drain.keys.first.target
+  end
+
   def test_http_metric_drops_userinfo_and_fragment
     @http_config.host("api.example.com", :all)
     @processor.on_end(MockSpan.new(

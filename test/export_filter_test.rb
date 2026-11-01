@@ -124,11 +124,94 @@ class ExportFilterTest < Minitest::Test
 
   def test_other_attributes_are_scanned_for_urls_pairs_and_sql
     assert_equal "see https://x.test/a?token=#{FILTERED}", filtered("note", "see https://u:hunter2@x.test/a?token=hunter2#hunter2")
-    assert_equal "password=#{FILTERED} page=2", filtered("note", "password=hunter2 page=2")
+    assert_equal "password=#{FILTERED}", filtered("note", "password=hunter2 page=2")
     assert_equal "token: #{FILTERED}", filtered("note", "token: hunter2")
-    assert_equal %({password=>#{FILTERED}, "ok"=>"y"}), filtered("note", %({"password"=>"hunter2", "ok"=>"y"}))
     assert_equal "SELECT ?", filtered("note", "SELECT 'hunter2'")
     assert_equal ["token=#{FILTERED}", "ok"], filtered("tags", ["token=hunter2", "ok"])
+  end
+
+  def test_json_looking_values_are_left_out
+    [%({"password":"hunter2"}), %({"a":{"secret":"hunter2"}}), %( [{"token":"hunter2"}]), %({"password"=>"hunter2"})].each do |value|
+      assert_equal FILTERED, filtered("note", value), value
+      assert_equal FILTERED, @filter.name(value), value
+    end
+  end
+
+  def test_json_inside_text_is_filtered
+    refute_includes filtered("note", %(sent {"token":"hunter2"})), "hunter2"
+    refute_includes @filter.name(%(sent {"token":"hunter2"})), "hunter2"
+  end
+
+  def test_a_value_shaped_like_a_url_gets_no_exemption
+    ["password=//hunter2", "secret: //hunter2", "token://hunter2", "next=//u:hunter2@x/?token=hunter2", "next=//hunter2"].each do |value|
+      refute_includes filtered("note", value), "hunter2", value
+      refute_includes @filter.name(value), "hunter2", value
+    end
+  end
+
+  def test_urls_in_text_are_read_whole
+    assert_equal "see https://x.test/a?page=2 ok", filtered("note", "see https://x.test/a?page=2 ok")
+    assert_equal "see //x.test/a ok", filtered("note", "see //u:hunter2@x.test/a ok")
+  end
+
+  def test_a_sensitive_key_masks_the_rest_of_its_line
+    [
+      "authorization: Bearer hunter2", "Authorization=Basic hunter2 more", "cookie: a=1; b=hunter2", "password = two hunter2",
+      %q(password="a\"hunter2"), %q(password='a\'hunter2'), "pass%77ord=hunter2", "user%5Btoken%5D=hunter2", %(password="a\nhunter2"),
+    ].each do |value|
+      refute_includes filtered("note", value), "hunter2", value
+      refute_includes @filter.name(value), "hunter2", value
+    end
+    assert_equal "password=#{FILTERED}\nok=1", filtered("note", "password=a b\nok=1")
+  end
+
+  def test_bearer_and_basic_credentials_without_a_key
+    assert_equal "sent Bearer #{FILTERED} ok", filtered("note", "sent Bearer hunter2 ok")
+    assert_equal "sent Basic #{FILTERED} ok", filtered("note", "sent Basic aHVudGVyMjpodW50ZXIy ok")
+    assert_equal "basic plan", filtered("note", "basic plan")
+  end
+
+  def test_ordinary_text_is_kept
+    ["gold plan", "at 12:30:11 done", "plan: gold", "a=1 b=2"].each { |value| assert_equal value, filtered("note", value) }
+  end
+
+  def test_statements_for_systems_that_are_not_known_sql_keep_only_the_command
+    {
+      "etcd" => ["PUT hunter2", "PUT ?"], "cassandra" => ["SELECT * FROM hunter2", "SELECT ?"], "neo4j" => [%(MATCH (n {p:"hunter2"})), "MATCH ?"],
+      "couchbase" => [%({"a":"hunter2"}), "?"], "mystery" => ["hunter2 x", "?"], "memcached" => ["set hunter2", "set ?"],
+    }.each do |system, (statement, expected)|
+      assert_equal expected, @filter.attributes("db.system" => system, "db.statement" => statement)["db.statement"], system
+    end
+  end
+
+  def test_db_operations_must_be_a_plain_word
+    assert_equal "SELECT", filtered("db.operation", "SELECT")
+    assert_equal "find", filtered("db.operation.name", "find")
+    assert_equal "?", filtered("db.operation", "hunter2 x")
+    assert_equal "?", filtered("db.operation.name", "a b")
+  end
+
+  def test_sql_systems_are_masked_as_sql
+    %w[postgresql postgis mysql2 trilogy sqlite cockroachdb sqlserver oracle].each do |system|
+      assert_equal "SELECT a FROM t WHERE b = ?", @filter.attributes("db.system" => system, "db.statement" => "SELECT a FROM t WHERE b = 'hunter2'")["db.statement"], system
+    end
+  end
+
+  def test_userinfo_shapes_in_paths_and_without_a_scheme
+    assert_equal "https://x.test/#{FILTERED}?z=1", filtered("http.url", "https://x.test/a@hunter2?z=1")
+    assert_equal "https://x.test/p/#{FILTERED}", filtered("http.url", "https://x.test/p/u:hunter2@y")
+    assert_equal "/a/#{FILTERED}?d=1", filtered("http.target", "/a/b:hunter2@c?d=1")
+    assert_equal "/#{FILTERED}", filtered("url.path", "/u:hunter2@c")
+    assert_equal "x.test/a", filtered("http.url", "user:hunter2@x.test/a")
+    assert_equal "https://x.test/@bob/posts", filtered("http.url", "https://x.test/@bob/posts")
+    assert_equal "/@bob", filtered("url.path", "/@bob")
+  end
+
+  def test_sql_is_recognized_past_comments_parentheses_and_other_starters
+    ["/* c */ SELECT 'hunter2'", "-- c\nSELECT 'hunter2'", "(SELECT 'hunter2')", "( ( SELECT 'hunter2'))", "/* SELECT 'hunter2'", "EXPLAIN SELECT 'hunter2'", "CALL f('hunter2')", "EXEC f 'hunter2'", "EXECUTE f('hunter2')", "VALUES ('hunter2')", "COPY t FROM 'hunter2'", "TRUNCATE 'hunter2'", "SHOW 'hunter2'", "DROP 'hunter2'"].each do |value|
+      refute_includes filtered("note", value), "hunter2", value
+      refute_includes @filter.name(value), "hunter2", value
+    end
   end
 
   def test_span_names
