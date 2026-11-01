@@ -191,6 +191,15 @@ class ExportFilterTest < Minitest::Test
     end
   end
 
+  def test_a_value_too_long_to_judge_is_masked
+    ["%3Dhunter2", "@hunter2", "//hunter2", "=hunter2", "plain-hunter2"].each do |tail|
+      value = "next=#{"a" * 257}#{tail}"
+      assert_equal "next=#{FILTERED}", filtered("note", value), tail
+      assert_equal "next=#{FILTERED}", @filter.name(value), tail
+    end
+    assert_equal "next=#{"a" * 256}", filtered("note", "next=#{"a" * 256}")
+  end
+
   def test_scanning_text_stays_bounded
     ["a" * 100_000, "a:" * 100_000, "a=1 " * 30_000, "a." * 50_000, "https://" * 10_000, "." * 100_000].each do |value|
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)

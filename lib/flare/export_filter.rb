@@ -72,7 +72,7 @@ module Flare
         |(?<quote>["']?)(?<key>[\w.\-\[\]%]++)\k<quote>\s*+(?:=>|=|:)\s*+
       )
     }xi
-    # Enough to judge a value; the scan carries on through the rest of a kept one.
+    # A value longer than this is masked rather than judged on part of it.
     VALUE_WINDOW = 256
     VALUE = /\A[^\s&;,]*+/
     NESTED_VALUE = %r{=|%3d|//|%2f%2f|@|%40}i
@@ -237,8 +237,8 @@ module Flare
         elsif match[:auth] then out << match[:auth].split(/\s+/).first << " " << FILTERED
         else
           out << match[0]
-          value = text[position, VALUE_WINDOW][VALUE]
-          next if pair_kept?(match[:key], value)
+          value = text[position, VALUE_WINDOW + 1][VALUE]
+          next if value.length <= VALUE_WINDOW && pair_kept?(match[:key], value)
 
           out << FILTERED
           position = sensitive_value_end(text, position)
