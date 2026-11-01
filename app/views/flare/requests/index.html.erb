@@ -2,6 +2,7 @@
   <h1 class="page-title"><%= page_title %></h1>
   <div class="filters">
     <%= form_tag(requests_path, method: :get, id: "filter-form") do %>
+      <%= hidden_field_tag :sort, "slowest" if sorted_by_slowest? %>
       <%= select_tag :origin,
         options_for_select([
           ["All Origins", ""],
@@ -54,7 +55,7 @@
               <th>Name</th>
               <th style="width: 70px;">Verb</th>
               <th style="width: 80px; text-align: right;">Status</th>
-              <th style="width: 100px; text-align: right;">Duration</th>
+              <th style="width: 100px; text-align: right;"><%= duration_sort_link %></th>
               <th style="width: 120px; text-align: right;">Happened</th>
             </tr>
           </thead>
