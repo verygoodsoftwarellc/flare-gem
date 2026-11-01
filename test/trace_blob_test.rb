@@ -150,6 +150,7 @@ class TraceBlobTest < Minitest::Test
       require "flare/trace_blob"
 
       class App < Rails::Application
+        config.root = Dir.pwd
         config.eager_load = false
         config.secret_key_base = "x" * 32
         config.logger = Logger.new(File::NULL)
@@ -169,7 +170,7 @@ class TraceBlobTest < Minitest::Test
       export.call
     RUBY
 
-    output, status = Open3.capture2e(RbConfig.ruby, "-e", script)
+    output, status = Dir.mktmpdir { |dir| Open3.capture2e(RbConfig.ruby, "-e", script, chdir: dir) }
 
     assert status.success?, output
     assert_equal ["zipcode=[FILTERED]&plan=2&page=3", "zipcode=[FILTERED]&plan=[FILTERED]&page=3"], output.lines.map(&:chomp).last(2)
