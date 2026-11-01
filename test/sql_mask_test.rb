@@ -30,6 +30,7 @@ class SqlMaskTest < Minitest::Test
 
   def test_in_lists_collapse
     assert_equal "id IN (?)", mask("id IN (1, 2, $3)")
+    assert_equal "id IN (?)", mask("id IN ( 1, 2 )")
   end
 
   def test_whitespace_collapses

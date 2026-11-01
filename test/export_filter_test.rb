@@ -136,6 +136,8 @@ class ExportFilterTest < Minitest::Test
     assert_equal "GET /users/:id", @filter.name("GET /users/:id")
     assert_equal "GET /a?token=#{FILTERED}", @filter.name("GET /a?token=hunter2")
     assert_equal "SELECT ?", @filter.name("SELECT 'hunter2'")
+    assert_equal "DELETE FROM t WHERE id > ?", @filter.name("DELETE FROM t WHERE id > 5")
+    assert_equal "GET /a?next=#{FILTERED}", @filter.name("GET /a?next=https%3A%2F%2Fx.test%3Ftoken%3Dhunter2")
     assert_equal "POST https://x.test/a", @filter.name("POST https://u:hunter2@x.test/a")
     assert_nil @filter.name(nil)
   end

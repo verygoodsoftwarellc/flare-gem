@@ -2,6 +2,7 @@
 
 require "active_support"
 require "active_support/parameter_filter"
+require "set"
 require "uri"
 
 require_relative "sql_mask"
@@ -33,7 +34,7 @@ module Flare
       db.system db.system.name db.name db.namespace db.operation db.operation.name
       db.sql.table db.collection.name db.redis.database_index
       exception.type server.port net.peer.port
-    ].to_h { |name| [name, true] }.freeze
+    ].to_set.freeze
     KEPT_PREFIX = /\A(?:code|messaging|flare|otel)\./
 
     # What these hold can't be sorted into safe and unsafe parts: message bodies
@@ -42,17 +43,15 @@ module Flare
       to from cc bcc reply_to subject mail
       args arguments params parameters headers cookies body payload request response env session
       exception exception_object exception.message exception.stacktrace
-    ].to_h { |name| [name, true] }.freeze
+    ].to_set.freeze
     OPAQUE_PREFIX = /\Aemail\./
 
-    STATEMENTS = %w[db.statement db.query.text db.query db.sql sql statement query].to_h { |name| [name, true] }.freeze
+    STATEMENTS = %w[db.statement db.query.text db.query db.sql sql statement query].to_set.freeze
     NON_SQL_SYSTEM = /redis|memcache|mongo|elasticsearch|dynamo/i
     SQL_TEXT = /\A\s*(?:select|insert|update|delete|replace|merge|with|set|create|alter|grant)\b/i
 
-    URLS = %w[http.url url.full url.path http.target http.referer url.original].to_h { |name| [name, true] }.freeze
-    HOSTS = %w[http.host server.address net.peer.name].to_h { |name| [name, true] }.freeze
-    QUERY_STRING = "url.query"
-    CACHE_KEY = "key"
+    URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
+    HOSTS = %w[http.host server.address net.peer.name].to_set.freeze
     CACHE_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}(?=[\/:])/
 
     URL_IN_TEXT = %r{[a-z][a-z0-9+.-]*://[^\s'"<>]+}i
@@ -97,54 +96,50 @@ module Flare
       attrs.each_with_object({}) { |(name, value), out| out[name] = attribute(UTF8.scrub(name.to_s), value, system) }
     end
 
-    # Span names are usually fixed labels, so most never go past the check.
     def name(value)
-      return value unless value.is_a?(String) && value.match?(/[?'=@]|:\/\/|:\s/n)
+      return value unless value.is_a?(String)
 
-      contain { free_text(clean(value)) }
+      free_text(clean(value))
+    rescue StandardError
+      FILTERED
     end
 
     private
 
     def attribute(name, value, system)
-      return value if KEPT.key?(name) || KEPT_PREFIX.match?(name)
+      return value if KEPT.include?(name) || KEPT_PREFIX.match?(name)
+      return FILTERED if OPAQUE.include?(name) || OPAQUE_PREFIX.match?(name)
 
-      contain do
-        next FILTERED if OPAQUE.key?(name) || OPAQUE_PREFIX.match?(name)
-        next filtered_by_name(name, value) unless value.is_a?(String) || value.is_a?(Array)
-        next value.map { |item| attribute(name, item, system) } if value.is_a?(Array)
-
-        text = clean(value)
-        if STATEMENTS.key?(name) then statement(text, system)
-        elsif URLS.key?(name) then url(text)
-        elsif HOSTS.key?(name) then text.sub(/\A.*@/m, "")
-        elsif name == QUERY_STRING then query_string(text)
-        elsif name == CACHE_KEY then cache_key(text)
-        elsif filtered_by_name(name, text) == FILTERED then FILTERED
-        else free_text(text)
-        end
+      case value
+      when String then text_attribute(name, value, system)
+      when Array then value.map { |item| attribute(name, item, system) }
+      else param_kept?(name, value) ? value : FILTERED
       end
+    rescue StandardError
+      # A value that can't be processed doesn't go out.
+      FILTERED
     end
 
-    # A value that can't be processed doesn't go out.
-    def contain
-      yield
-    rescue StandardError
-      FILTERED
+    def text_attribute(name, value, system)
+      return statement(value, system) if STATEMENTS.include?(name)
+
+      text = clean(value)
+      if URLS.include?(name) then url(text)
+      elsif HOSTS.include?(name) then text.sub(/\A.*@/m, "")
+      elsif name == "url.query" then query_string(text)
+      elsif name == "key" then cache_key(text)
+      elsif param_kept?(name, text) then free_text(text)
+      else FILTERED
+      end
     end
 
     def clean(value)
       UTF8.scrub(value.bytesize > MAX_TEXT_BYTES ? value.byteslice(0, MAX_TEXT_BYTES) : value)
     end
 
-    def filtered_by_name(name, value)
-      result = @parameter_filter.filter_param(name, value)
-      result.equal?(value) || result == value ? value : FILTERED
-    end
-
     def statement(text, system)
-      if system && NON_SQL_SYSTEM.match?(system.to_s)
-        command = text[/\A\s*[A-Za-z_.]+/]
+      if NON_SQL_SYSTEM.match?(system.to_s)
+        command = clean(text)[/\A\s*[A-Za-z_.]+/]
         return command ? "#{command.strip} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
       end
 
@@ -172,25 +167,27 @@ module Flare
     end
 
     def query_string(text)
-      text.split(/([&;])/, -1).map { |part| part.match?(/\A[&;]?\z/) ? part : pair(part) }.join
+      text.gsub(/[^&;]+/) { |part| pair(part) }
     end
 
     def pair(part)
       key, value = part.split("=", 2)
       return FILTERED if value.nil?
 
-      decoded = URI.decode_www_form_component(key)
-      return "#{key}=#{FILTERED}" if NESTED_VALUE.match?(value) || !param_kept?(decoded, value)
+      pair_kept?(key, value) ? part : "#{key}=#{FILTERED}"
+    end
 
-      part
-    rescue ArgumentError
-      FILTERED
+    def pair_kept?(key, value)
+      !NESTED_VALUE.match?(value) && param_kept?(URI.decode_www_form_component(key), value)
     end
 
     # user[password]=x is checked as nested params, so filters written as
     # "user.password" apply to it too.
     def param_kept?(key, value)
-      return @parameter_filter.filter_param(key, value) == value unless key.include?("[")
+      unless key.include?("[")
+        result = @parameter_filter.filter_param(key, value)
+        return result.equal?(value) || result == value
+      end
 
       path = key.split(/[\[\]]+/).reject(&:empty?)
       nested = path.reverse.inject(value) { |inner, part| { part => inner } }
@@ -214,7 +211,8 @@ module Flare
     end
 
     def pair_in_text(found, key, separator, value)
-      return found if value.start_with?(FILTERED) || param_kept?(key, value)
+      # A value starting // is the rest of a URL that has already been through #url.
+      return found if value.start_with?(FILTERED, "//") || pair_kept?(key, value)
 
       "#{key}#{separator}#{FILTERED}"
     end

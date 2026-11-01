@@ -180,7 +180,8 @@ module Flare
       db_system = span.attributes["db.system"].to_s
       # Read the table and operation from the statement without its values, so
       # the words in a string literal can't become the metric's name.
-      statement = SqlMask.mask(span.attributes["db.statement"], db_system) if db_system != "redis" && span.attributes["db.statement"]
+      raw_statement = span.attributes["db.statement"]
+      statement = SqlMask.mask(raw_statement, db_system) if raw_statement && db_system != "redis"
 
       key = MetricKey.new(
         bucket: bucket_time(span),
@@ -203,7 +204,7 @@ module Flare
              span.attributes["net.peer.name"] ||
              extract_host_from_url(span) ||
              "unknown"
-      host = host.to_s.sub(/\A.*@/, "")
+      host = host.to_s.sub(/\A.*@/m, "")
 
       method = span.attributes["http.method"] ||
                span.attributes["http.request.method"] ||

@@ -25,10 +25,9 @@ module Flare
 
     WORD = /[A-Za-z_\x80-\xff][\w$\x80-\xff]*+/n
     NUMBER = /\.?\d[\w.\x80-\xff]*+(?:(?<=[eE])[+-]\d++)?/n
-    PLACEHOLDER_NUMBER = /\$\d++/n
+    DOLLAR_OTHER = /\$\d*+/n
     DOLLAR_TAG = /\$(?:[A-Za-z_\x80-\xff][\w\x80-\xff]*+)?\$/n
-    LINE_COMMENT = /--[^\n]*+/n
-    HASH_COMMENT = /#[^\n]*+/n
+    LINE_COMMENT = /(?:--|#)[^\n]*+/n
     COMMENT_START = %r{/\*}n
     COMMENT_EDGE = %r{/\*|\*/}n
     LITERAL_PREFIX = /\A(?:[xXbBnNeE]|_\w+)\z/n
@@ -60,10 +59,10 @@ module Flare
       out = scan(StringScanner.new(sql), mysql)
       out.tr!(OTHER_WHITESPACE, " ")
       out.squeeze!(" ")
-      out.gsub!(IN_LIST, "IN (?)") if out.include?("(?")
+      out.gsub!(IN_LIST, "IN (?)")
       out.strip!
       out << TRUNCATED if truncated
-      out.force_encoding(Encoding::UTF_8).scrub
+      out.force_encoding(Encoding::UTF_8).scrub!
     end
 
     def scan(scanner, mysql)
@@ -73,113 +72,103 @@ module Flare
       until scanner.eos?
         if (run = scanner.scan(plain))
           out << run
-        elsif scanner.skip(NUMBER) || scanner.skip(PLACEHOLDER_NUMBER)
+        elsif scanner.skip(NUMBER)
           out << PLACEHOLDER
         elsif (word = scanner.scan(WORD))
           if LITERAL_PREFIX.match?(word)
-            scanner.getch
-            out << PLACEHOLDER
-            return out unless skip_literal(scanner, "'", backslash_escapes: word.casecmp?("e"))
+            mask_literal(scanner, out, backslash_escapes: word.casecmp?("e"))
           else
             out << word
           end
         else
-          return out unless scan_delimited(scanner, out, mysql)
+          scan_delimiter(scanner, out, mysql)
         end
       end
 
       out
     end
 
-    # Handles the token at a delimiter the plain run stopped on. False when the
-    # rest has been masked.
-    def scan_delimited(scanner, out, mysql)
+    # Handles the delimiter the plain run stopped on. Giving up on the rest of the
+    # statement means terminating the scanner, which ends the loop above.
+    def scan_delimiter(scanner, out, mysql)
       case scanner.peek(1)
       when "'"
-        scanner.getch
-        out << PLACEHOLDER
-        skip_literal(scanner, "'")
+        mask_literal(scanner, out)
       when '"'
         # A closed name would have been part of the plain run on other systems.
-        out << PLACEHOLDER
-        return false unless mysql
-
-        scanner.getch
-        skip_literal(scanner, '"')
+        mysql ? mask_literal(scanner, out) : mask_rest(scanner, out)
       when "`"
         # Likewise: only an unterminated name gets here.
-        out << PLACEHOLDER
-        false
+        mask_rest(scanner, out)
       when "$"
-        scan_dollar(scanner, out)
-      when "-"
+        mask_dollar(scanner, out)
+      when "/"
+        skip_comment(scanner, out)
+      else # -- or, on MySQL only, #
         scanner.skip(LINE_COMMENT)
         out << " "
-        true
-      when "/"
-        scan_comment(scanner, out)
-      else # "#", which only stops the plain run on MySQL
-        scanner.skip(HASH_COMMENT)
-        out << " "
-        true
       end
     end
 
-    # Reads to the closing quote, true if there was one. The scanner is just past
-    # the opening quote.
+    def mask_rest(scanner, out)
+      out << PLACEHOLDER
+      scanner.terminate
+    end
+
+    # The scanner is on the opening quote. Reads to the closing one, or masks the
+    # rest if there isn't one.
     #
     # An even run of backslashes before a quote closes the literal whether or not
     # the server treats backslash as an escape. An odd run only closes it if the
     # server doesn't, and that depends on the database and its settings, so the
     # literal counts as unterminated. Only E'' strings say for themselves.
-    def skip_literal(scanner, quote, backslash_escapes: false)
+    def mask_literal(scanner, out, backslash_escapes: false)
+      quote = scanner.getch
       plain = quote == "'" ? /[^'\\]*+/n : /[^"\\]*+/n
+      out << PLACEHOLDER
 
       loop do
         scanner.skip(plain)
-        return false if scanner.eos?
+        return scanner.terminate if scanner.eos?
 
         if scanner.peek(1) == "\\"
           if backslash_escapes
             scanner.skip(/\\.?/mn)
           else
             run = scanner.skip(/\\+/n)
-            return false if run.odd? && scanner.peek(1) == quote
+            return scanner.terminate if run.odd? && scanner.peek(1) == quote
           end
         else
           scanner.getch
-          return true unless scanner.peek(1) == quote
+          return unless scanner.peek(1) == quote
 
           scanner.getch
         end
       end
     end
 
-    def scan_dollar(scanner, out)
+    def mask_dollar(scanner, out)
       out << PLACEHOLDER
       if (tag = scanner.scan(DOLLAR_TAG))
-        !scanner.skip_until(Regexp.new(Regexp.escape(tag), Regexp::NOENCODING)).nil?
+        scanner.terminate unless scanner.skip_until(Regexp.new(Regexp.escape(tag), Regexp::NOENCODING))
       else
-        # A lone $ isn't a quote on any system, but nothing valid needs it kept.
-        scanner.getch
-        true
+        scanner.skip(DOLLAR_OTHER)
       end
     end
 
     # Comments nest on Postgres. Reading them that way elsewhere can only mask
     # more, never less.
-    def scan_comment(scanner, out)
+    def skip_comment(scanner, out)
       scanner.skip(COMMENT_START)
       depth = 1
       while depth.positive?
-        return false unless scanner.skip_until(COMMENT_EDGE)
+        return scanner.terminate unless scanner.skip_until(COMMENT_EDGE)
 
         depth += scanner.matched == "/*" ? 1 : -1
       end
       out << " "
-      true
     end
 
-    private_class_method :scan, :scan_delimited, :skip_literal, :scan_dollar, :scan_comment
+    private_class_method :scan, :scan_delimiter, :mask_rest, :mask_literal, :mask_dollar, :skip_comment
   end
 end
