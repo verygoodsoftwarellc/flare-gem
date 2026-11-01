@@ -171,7 +171,7 @@ Spans are stored in a local SQLite database (`db/flare.sqlite3` by default) and 
 
 ### What leaves your app
 
-Captured traces go through your app's `config.filter_parameters` before upload, including query strings, along with a default list of common credential names. SQL statements have their values replaced with `?`, URLs lose their userinfo and fragments, and mail recipients, subjects, job arguments and exception contents are left out. Cache keys keep only their leading word. Metrics carry names (controller, job, table, operation, host), not values. Your local development database and dashboard keep the full values.
+Captured traces go through your app's `config.filter_parameters` before upload, including query strings, along with a default list of common credential names. SQL statements have their values replaced with `?`, Redis statements keep the command and the key's first segment, MongoDB commands keep their structure with values masked, URLs lose their userinfo and fragments, and mail recipients, subjects, job arguments and exception contents are left out. Cache keys keep only their leading word. Metrics carry names (controller, job, table, operation, host), not values. Your local development database and dashboard keep the full values, except Redis arguments, which aren't kept anywhere.
 
 ## Development
 
