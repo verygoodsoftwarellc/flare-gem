@@ -235,17 +235,17 @@ module Flare
       def count_queries_by_trace(trace_ids)
         transaction_join, filter_conditions, filter_values = category_filter("queries")
 
-        trace_ids.each_slice(ID_BATCH_SIZE).each_with_object({}) do |batch, counts|
-          conditions = ["s.trace_id IN (#{batch.map { "?" }.join(", ")})", "s.parent_span_id != ?", *filter_conditions]
-          rows = query_all(<<~SQL, [*batch, MISSING_PARENT_ID, *filter_values])
+        conditions = ["s.parent_span_id != ?", *filter_conditions].join(" AND ")
+        rows = query_all_in_batches(trace_ids, after: [MISSING_PARENT_ID, *filter_values]) do |placeholders|
+          <<~SQL
             SELECT s.trace_id, COUNT(*) as count
             FROM flare_spans s
             #{transaction_join}
-            WHERE #{conditions.join(" AND ")}
+            WHERE s.trace_id IN (#{placeholders}) AND #{conditions}
             GROUP BY s.trace_id
           SQL
-          rows.each { |row| counts[row["trace_id"]] = row["count"] }
         end
+        rows.to_h { |row| [row["trace_id"], row["count"]] }
       end
 
       # Find a single span by its database ID
@@ -490,12 +490,10 @@ module Flare
 
       # Load properties for multiple owners at once
       def load_properties_for_ids(owner_type, owner_ids)
-        return {} if owner_ids.empty?
-
-        rows = owner_ids.each_slice(ID_BATCH_SIZE).flat_map do |batch|
-          query_all(<<~SQL, [owner_type] + batch)
+        rows = query_all_in_batches(owner_ids, before: [owner_type]) do |placeholders|
+          <<~SQL
             SELECT owner_id, key, value, value_type FROM flare_properties
-            WHERE owner_type = ? AND owner_id IN (#{batch.map { "?" }.join(", ")})
+            WHERE owner_type = ? AND owner_id IN (#{placeholders})
           SQL
         end
 
@@ -508,13 +506,8 @@ module Flare
 
       # Load events for multiple spans at once
       def load_events_for_spans(span_ids)
-        return {} if span_ids.empty?
-
-        event_rows = span_ids.each_slice(ID_BATCH_SIZE).flat_map do |batch|
-          query_all(<<~SQL, batch)
-            SELECT * FROM flare_events
-            WHERE span_id IN (#{batch.map { "?" }.join(", ")})
-          SQL
+        event_rows = query_all_in_batches(span_ids) do |placeholders|
+          "SELECT * FROM flare_events WHERE span_id IN (#{placeholders})"
         end
 
         # Group events by span_id
@@ -747,6 +740,13 @@ module Flare
         setup_database unless @setup
         @mutex.synchronize do
           connection.execute(sql, values)
+        end
+      end
+
+      # Runs the block's SQL once per batch of ids, staying under the bind limit.
+      def query_all_in_batches(ids, before: [], after: [])
+        ids.each_slice(ID_BATCH_SIZE).flat_map do |batch|
+          query_all(yield(batch.map { "?" }.join(", ")), [*before, *batch, *after])
         end
       end
 

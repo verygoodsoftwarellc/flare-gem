@@ -72,6 +72,23 @@ class CLINplus1Test < Minitest::Test
     end
   end
 
+  def test_ignores_statements_on_spans_that_are_not_queries
+    in_app do |dir|
+      db = create_database(dir)
+      root = insert_root(db, "t1", "/posts")
+      2.times do
+        insert_span(db, trace: "t1", name: "redis.command", kind: "client", parent: root, ns: 1000, at: Time.now,
+          properties: { "db.statement" => "GET key" })
+      end
+      db.close
+
+      out, err, status = flare(dir, "nplus1", "--json")
+
+      assert status.success?, err
+      assert_equal [], JSON.parse(out)
+    end
+  end
+
   def test_prints_json_with_the_request_fields_the_other_commands_report
     in_app do |dir|
       db = create_database(dir)
@@ -144,11 +161,11 @@ class CLINplus1Test < Minitest::Test
   private
 
   def insert_root(db, trace, path, at: Time.now)
-    insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: 10_000_000, at: at, properties: {
+    root = insert_span(db, trace: trace, name: "GET #{path}", kind: "server", parent: ROOT_PARENT, ns: 10_000_000, at: at, properties: {
       "http.method" => "GET", "http.target" => path, "http.status_code" => 200,
       "code.namespace" => "PostsController", "code.function" => "index",
     })
-    db.get_first_value("SELECT span_id FROM flare_spans WHERE trace_id = ?", [trace])
+    root.to_s
   end
 
   def insert_query(db, trace, root, statement, ms: 1, name: "Post Load", file: nil, line: nil)

@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "optparse"
 require_relative "local_spans"
 require_relative "output"
 
@@ -12,26 +11,8 @@ module Flare
     include CLI::LocalSpans
     include CLI::Output
 
-    DEFAULT_LIMIT = 10
-
     def initialize(argv)
-      @limit = DEFAULT_LIMIT
-      @json = false
-      @database_path = default_database_path
-
-      OptionParser.new do |opts|
-        opts.banner = "Usage: flare requests [options]"
-        opts.on("--last N", Integer, "Number of requests to show (default: #{DEFAULT_LIMIT})") do |n|
-          raise OptionParser::InvalidArgument, "#{n} (must be at least 1)" if n < 1
-
-          @limit = n
-        end
-        opts.on("--json", "Print JSON instead of a table") { @json = true }
-        opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
-      end.parse!(argv)
-    rescue OptionParser::ParseError => e
-      $stderr.puts e.message
-      exit 1
+      parse_options(argv, banner: "Usage: flare requests [options]", last_help: "Number of requests to show")
     end
 
     def run

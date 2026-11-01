@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "optparse"
 require "time"
 
 module Flare
@@ -8,7 +9,33 @@ module Flare
     # that inspect it from the terminal. Explains a missing or unreadable
     # database and exits rather than printing a backtrace.
     module LocalSpans
+      DEFAULT_LIMIT = 10
+
       private
+
+      # Parses the options these commands share, returning the other arguments.
+      # Pass last_help for commands that read several requests.
+      def parse_options(argv, banner:, last_help: nil)
+        @limit = DEFAULT_LIMIT
+        @json = false
+        @database_path = default_database_path
+
+        OptionParser.new do |opts|
+          opts.banner = banner
+          if last_help
+            opts.on("--last N", Integer, "#{last_help} (default: #{DEFAULT_LIMIT})") do |n|
+              raise OptionParser::InvalidArgument, "#{n} (must be at least 1)" if n < 1
+
+              @limit = n
+            end
+          end
+          opts.on("--json", "Print JSON instead of text") { @json = true }
+          opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
+        end.parse!(argv)
+      rescue OptionParser::ParseError => e
+        $stderr.puts e.message
+        exit 1
+      end
 
       def default_database_path
         File.join(Dir.pwd, "db", "flare.sqlite3")
@@ -44,6 +71,10 @@ module Flare
         return unless props["code.filepath"]
 
         [props["code.filepath"], props["code.lineno"]].compact.join(":")
+      end
+
+      def request_heading(request, title)
+        [bold(title), request[:status], format("%.1fms", request[:duration_ms]), endpoint(request)].compact.join("  ")
       end
 
       def endpoint(request)

@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "json"
-require "optparse"
 require_relative "local_spans"
 require_relative "output"
 
@@ -13,7 +12,6 @@ module Flare
     include CLI::LocalSpans
     include CLI::Output
 
-    DEFAULT_LIMIT = 10
     MINIMUM_REPEATS = 2
     # What Active Record names its own bookkeeping, which repeats by design.
     # Transaction statements from elsewhere have no name, so they're also
@@ -21,23 +19,7 @@ module Flare
     IGNORED_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
     def initialize(argv)
-      @limit = DEFAULT_LIMIT
-      @json = false
-      @database_path = default_database_path
-
-      OptionParser.new do |opts|
-        opts.banner = "Usage: flare nplus1 [options]"
-        opts.on("--last N", Integer, "Number of requests to check (default: #{DEFAULT_LIMIT})") do |n|
-          raise OptionParser::InvalidArgument, "#{n} (must be at least 1)" if n < 1
-
-          @limit = n
-        end
-        opts.on("--json", "Print JSON instead of text") { @json = true }
-        opts.on("--db PATH", "Spans database (default: db/flare.sqlite3)") { |path| @database_path = File.expand_path(path) }
-      end.parse!(argv)
-    rescue OptionParser::ParseError => e
-      $stderr.puts e.message
-      exit 1
+      parse_options(argv, banner: "Usage: flare nplus1 [options]", last_help: "Number of requests to check")
     end
 
     def run
@@ -72,7 +54,7 @@ module Flare
     def query?(span)
       props = span[:properties]
       statement = props["db.statement"]
-      return false unless statement
+      return false unless statement && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].include?(pattern) }
 
       !IGNORED_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
     end
@@ -106,8 +88,7 @@ module Flare
     end
 
     def print_request(request)
-      puts [bold("#{request[:method]} #{request[:path]}"), request[:status], format("%.1fms", request[:duration_ms]),
-        endpoint(request), dim(request[:trace_id])].compact.join("  ")
+      puts "#{request_heading(request, "#{request[:method]} #{request[:path]}")}  #{dim(request[:trace_id])}"
 
       request[:repeated].each do |query|
         puts format("%4dx %7.1fms  %s", query[:count], query[:total_ms], query[:statement])
