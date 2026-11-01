@@ -149,6 +149,11 @@ module Flare
       # Transaction statements to filter out from queries list
       TRANSACTION_STATEMENTS = %w[BEGIN COMMIT ROLLBACK].freeze
 
+      # Active Record names its own statements on every adapter, including ones
+      # the list above can't match (SQLite's "BEGIN immediate TRANSACTION",
+      # savepoints, PRAGMA, SHOW and SET).
+      BOOKKEEPING_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
+
       # List spans by category (for the spans listing pages)
       def list_spans_by_category(category, name: nil, limit: 50, offset: 0)
         patterns = SPAN_CATEGORIES[category] || []
@@ -699,11 +704,9 @@ module Flare
         db.execute("PRAGMA cache_size=2000")
       end
 
-      # Keyed by path, like SQLiteExporter, so storages for different files on
-      # the same thread don't share a connection.
       # SQL join, conditions and bind values that select a category's spans by
-      # name. Queries also leave out transaction statements (BEGIN, COMMIT,
-      # ROLLBACK).
+      # name. Queries also leave out transaction statements and what Active
+      # Record names its own bookkeeping.
       def category_filter(category)
         patterns = SPAN_CATEGORIES.fetch(category)
         conditions = ["(#{patterns.map { "s.name LIKE ?" }.join(" OR ")})"]
@@ -711,14 +714,21 @@ module Flare
         join = ""
 
         if category == "queries"
-          join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
+          join = <<~SQL
+            LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'
+            LEFT JOIN flare_properties query_name_prop ON query_name_prop.owner_type = 'Flare::Span' AND query_name_prop.owner_id = s.id AND query_name_prop.key = 'name'
+          SQL
           conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))"
           values.concat(TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" })
+          conditions << "(query_name_prop.value IS NULL OR query_name_prop.value NOT IN (#{BOOKKEEPING_QUERY_NAMES.map { "?" }.join(", ")}))"
+          values.concat(BOOKKEEPING_QUERY_NAMES.map { |query_name| "\"#{query_name}\"" })
         end
 
         [join, conditions, values]
       end
 
+      # Keyed by path, like SQLiteExporter, so storages for different files on
+      # the same thread don't share a connection.
       def connection_key
         :"flare_storage_db_#{@database_path.hash}"
       end
