@@ -3,6 +3,7 @@
 require_relative "metric_key"
 require_relative "http_metrics_config"
 require_relative "sql_mask"
+require_relative "store_statement"
 
 module Flare
   TRANSACTION_NAME_ATTRIBUTE = "flare.transaction_name" unless const_defined?(:TRANSACTION_NAME_ATTRIBUTE)
@@ -10,6 +11,8 @@ module Flare
   # OpenTelemetry SpanProcessor that extracts metrics from spans.
   # Aggregates counts, durations, and error rates by namespace/service/target/operation.
   class MetricSpanProcessor
+    MAX_METRIC_STATEMENT_BYTES = 4_096
+
     # Standard OTel span kind symbols
     SERVER = :server
     CLIENT = :client
@@ -179,9 +182,13 @@ module Flare
     def record_db_metric(span)
       db_system = span.attributes["db.system"].to_s
       # Read the table and operation from the statement without its values, so
-      # the words in a string literal can't become the metric's name.
+      # the words in a string literal can't become the metric's name. This runs on
+      # the request thread and needs only the start of a statement, and a literal
+      # the cut lands in is masked like any unterminated one.
       raw_statement = span.attributes["db.statement"]
-      statement = SqlMask.mask(raw_statement, db_system) if raw_statement && SqlMask.sql_system?(db_system)
+      if raw_statement && SqlMask.sql_system?(db_system)
+        statement = SqlMask.mask(raw_statement.to_s.byteslice(0, MAX_METRIC_STATEMENT_BYTES), db_system)
+      end
 
       key = MetricKey.new(
         bucket: bucket_time(span),
@@ -204,18 +211,18 @@ module Flare
              span.attributes["net.peer.name"] ||
              extract_host_from_url(span) ||
              "unknown"
-      host = host.to_s.sub(/\A.*@/m, "")
+      host = host.to_s.sub(/\A.*@/m, "").downcase
 
       method = span.attributes["http.method"] ||
                span.attributes["http.request.method"] ||
                "UNKNOWN"
 
-      path = resolve_http_path(span, host.to_s.downcase)
+      path = resolve_http_path(span, host)
 
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "http",
-        service: host.to_s.downcase,
+        service: host,
         target: "#{method.to_s.upcase} #{path}",
         operation: http_status_class(span)
       )
@@ -311,7 +318,7 @@ module Flare
     end
 
     def extract_db_target(span, db_system, statement)
-      if db_system == "redis"
+      if StoreStatement.redis_system?(db_system)
         # For Redis, use db.redis.namespace if available, or the database index
         span.attributes["db.redis.database_index"]&.to_s ||
           span.attributes["db.name"] ||
@@ -331,20 +338,13 @@ module Flare
     def extract_db_operation(span, db_system, statement)
       operation = SqlMask.operation_word(span.attributes["db.operation"])
 
-      if db_system == "redis"
+      if StoreStatement.redis_system?(db_system)
         (operation || SqlMask.operation_word(span.name.to_s.split.last))&.downcase || "query"
-      elsif SqlMask.sql_system?(db_system)
-        operation&.upcase || extract_sql_operation(statement) || "query"
       else
-        (operation || SqlMask.command_word(span.attributes["db.statement"]))&.upcase || "query"
+        # The first word of a masked statement (SELECT, INSERT, UPDATE, etc.)
+        word = statement ? statement.split(" ", 2).first : SqlMask.command_word(span.attributes["db.statement"])
+        (operation || word)&.upcase || "query"
       end
-    end
-
-    def extract_sql_operation(statement)
-      return nil unless statement
-
-      # Extract first word (SELECT, INSERT, UPDATE, DELETE, etc.)
-      statement.split(" ", 2).first&.upcase
     end
 
     def extract_sql_table(statement)

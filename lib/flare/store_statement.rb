@@ -3,6 +3,7 @@
 require "json"
 require "set"
 
+require_relative "sql_mask"
 require_relative "utf8"
 
 module Flare
@@ -10,7 +11,8 @@ module Flare
   # groups calls together: the command, a key's first segment, a document's
   # structure. Anything it can't read comes out as a placeholder.
   module StoreStatement
-    PLACEHOLDER = "?"
+    PLACEHOLDER = SqlMask::PLACEHOLDER
+    REDIS_SYSTEM = /redis|valkey/i
     MORE = "..."
     MAX_REDIS_LINES = 10
     MAX_REDIS_BYTES = 16_384
@@ -18,7 +20,7 @@ module Flare
     MAX_MONGO_DEPTH = 16
     MAX_MONGO_NODES = 5_000
 
-    KEY_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}(?=[\/:])/
+    KEY_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}[\/:]/
 
     # Commands whose first argument is a key.
     KEY_COMMANDS = %w[
@@ -54,10 +56,13 @@ module Flare
 
     module_function
 
+    def redis_system?(system)
+      REDIS_SYSTEM.match?(system.to_s)
+    end
+
     # A key's leading word and separator, like views/? or session:?.
     def masked_key(key)
-      namespace = key[KEY_NAMESPACE]
-      namespace ? "#{namespace}#{key[namespace.length]}#{PLACEHOLDER}" : PLACEHOLDER
+      "#{key[KEY_NAMESPACE]}#{PLACEHOLDER}"
     end
 
     # The instrumentation joins a pipeline's commands with line breaks and a
@@ -68,22 +73,13 @@ module Flare
       text = UTF8.scrub(statement.to_s.byteslice(0, MAX_REDIS_BYTES))
       lines = pipelined ? text.split("\n") : [text.split("\n", 2).first.to_s]
 
-      shapes = []
-      more = false
       keep_key = lines.size == 1
-      lines.each do |line|
-        more = true if line == MORE
-        shape = redis_line(line, keep_key)
-        next if shape.nil? || shapes.last == shape
-        break more = true if shapes.size == MAX_REDIS_LINES
-
-        shapes << shape
-      end
-
+      shapes = lines.filter_map { |line| redis_line(line, keep_key) }.chunk_while { |a, b| a == b }.map(&:first)
       return PLACEHOLDER if shapes.empty?
 
-      shapes << MORE if more
-      shapes.join("\n")
+      kept = shapes.first(MAX_REDIS_LINES)
+      kept << MORE if lines.include?(MORE) || shapes.size > MAX_REDIS_LINES
+      kept.join("\n")
     end
 
     def redis_line(line, keep_key)
@@ -91,13 +87,11 @@ module Flare
       return unless command
 
       command = command.upcase
-      if KEY_COMMANDS.include?(command)
-        return command unless key
+      key_command = KEY_COMMANDS.include?(command)
+      return unless key_command || OTHER_COMMANDS.include?(command) || MODULE_COMMAND.match?(command)
+      return command unless key
 
-        "#{command} #{keep_key ? masked_key(key) : PLACEHOLDER}"
-      elsif OTHER_COMMANDS.include?(command) || MODULE_COMMAND.match?(command)
-        key ? "#{command} #{PLACEHOLDER}" : command
-      end
+      "#{command} #{keep_key && key_command ? masked_key(key) : PLACEHOLDER}"
     end
 
     # Keeps the structure of a command's JSON and masks every value. Only a leading
@@ -116,7 +110,7 @@ module Flare
         masked[mongo_key(command)] = collection
       end
       JSON.generate(masked)
-    rescue JSON::ParserError, JSON::NestingError, EncodingError, TooLarge, ArgumentError
+    rescue JSON::ParserError, EncodingError, TooLarge, ArgumentError
       PLACEHOLDER
     end
 

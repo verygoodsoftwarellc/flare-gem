@@ -55,7 +55,7 @@ module Flare
 
     URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
     HOSTS = %w[http.host server.address net.peer.name].to_set.freeze
-    REDIS = /redis|valkey/i
+    USERINFO = /\A.*@/m
     MONGO = /mongo/i
 
     URL_START = %r{\A((?:[a-z][a-z0-9+.-]*:)?//)([^/?#]*)(.*)\z}im
@@ -64,8 +64,7 @@ module Flare
     PATH_USERINFO = %r{(?<=/|\A)[^/@]+@[^/]*}
 
     # One scan over free text, leftmost first, so what a URL contains is never read
-    # as a key and value. key holds a pair's name; separator ends where its value
-    # starts.
+    # as a key and value. key or quoted_key holds a pair's name.
     TEXT_TOKEN = %r{
       (?<url>(?<!\w)(?:(?<![.+\-])[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
       |(?<auth>(?<!\w)(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
@@ -145,7 +144,7 @@ module Flare
 
       text = clean(value)
       if URLS.include?(name) then url(text)
-      elsif HOSTS.include?(name) then text.sub(/\A.*@/m, "")
+      elsif HOSTS.include?(name) then text.sub(USERINFO, "")
       elsif name == "url.query" then query_string(text)
       elsif name == "key" then StoreStatement.masked_key(text)
       elsif param_kept?(name, text) then free_text(text)
@@ -158,7 +157,7 @@ module Flare
     end
 
     def statement(text, system)
-      return StoreStatement.redis(text) if REDIS.match?(system.to_s)
+      return StoreStatement.redis(text) if StoreStatement.redis_system?(system)
       return StoreStatement.mongo(text) if MONGO.match?(system.to_s)
 
       unless SqlMask.sql_system?(system)
@@ -176,7 +175,7 @@ module Flare
 
       scheme, authority, rest = match.captures
       if authority.include?("@")
-        authority = authority.sub(/\A.*@/m, "")
+        authority = authority.sub(USERINFO, "")
       elsif !NUMERIC_PORT.match?(authority)
         return "#{scheme}#{FILTERED}"
       end

@@ -149,16 +149,13 @@ module Flare
         plain == PLAIN_LIKE ? mask_literal(scanner, out) : mask_rest(scanner, out)
       when "$"
         mask_dollar(scanner, out)
-      when "/"
+      else # /* or, where they start a comment, //, -- and #
         if scanner.check(COMMENT_START)
           skip_comment(scanner, out)
         else
           scanner.skip(LINE_COMMENT)
           out << " "
         end
-      else # -- or, where it starts a comment, #
-        scanner.skip(LINE_COMMENT)
-        out << " "
       end
     end
 

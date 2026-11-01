@@ -286,6 +286,24 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "SELECT", key.operation
   end
 
+  def test_long_statements_name_the_metric_from_their_start_only
+    insert = "INSERT INTO cards (number) VALUES ('#{"sk_cut_secret" * 1_000}')"
+    late_from = "SELECT #{"a, " * 2_000}b FROM late_table"
+
+    [[insert, "cards", "INSERT"], [late_from, "app_db", "SELECT"]].each do |statement, target, operation|
+      @processor.on_finish(MockSpan.new(
+        kind: :client,
+        parent_span_id: "abc123",
+        attributes: { "db.system" => "postgresql", "db.name" => "app_db", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+      key = @storage.drain.keys.first
+      assert_equal target, key.target
+      assert_equal operation, key.operation
+    end
+  end
+
   def test_redis_span_creates_metric
     span = MockSpan.new(
       kind: :client,
