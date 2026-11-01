@@ -54,7 +54,7 @@ module Flare
     def query?(span)
       props = span[:properties]
       statement = props["db.statement"]
-      return false unless statement && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].include?(pattern) }
+      return false unless statement && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].downcase.include?(pattern) }
 
       !IGNORED_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
     end

@@ -72,6 +72,25 @@ class CLINplus1Test < Minitest::Test
     end
   end
 
+  def test_matches_query_span_names_like_the_query_count_does
+    in_app do |dir|
+      db = create_database(dir)
+      root = insert_root(db, "t1", "/posts")
+      2.times do
+        insert_span(db, trace: "t1", name: "PostgreSQL SELECT", kind: "client", parent: root, ns: 1000, at: Time.now,
+          properties: { "db.statement" => "SELECT 1" })
+      end
+      db.close
+
+      out, err, status = flare(dir, "nplus1", "--json")
+
+      assert status.success?, err
+      request = JSON.parse(out).first
+      assert_equal 2, request["queries"]
+      assert_equal 2, request["repeated"].first["count"]
+    end
+  end
+
   def test_ignores_statements_on_spans_that_are_not_queries
     in_app do |dir|
       db = create_database(dir)
