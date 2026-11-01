@@ -89,7 +89,7 @@ module Flare
           LEFT JOIN flare_properties action_prop ON action_prop.owner_type = 'Flare::Span' AND action_prop.owner_id = s.id AND action_prop.key = 'code.function'
           #{where_clause}
           AND COALESCE(method_prop.value, method_prop_old.value) IS NOT NULL
-          ORDER BY #{span_order(sort, "s.created_at DESC")}
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -119,7 +119,7 @@ module Flare
           LEFT JOIN flare_properties job_class_prop ON job_class_prop.owner_type = 'Flare::Span' AND job_class_prop.owner_id = s.id AND job_class_prop.key = 'code.namespace'
           LEFT JOIN flare_properties queue_prop ON queue_prop.owner_type = 'Flare::Span' AND queue_prop.owner_id = s.id AND queue_prop.key = 'messaging.destination'
           #{where_clause}
-          ORDER BY #{span_order(sort, "s.created_at DESC")}
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -184,7 +184,7 @@ module Flare
           LEFT JOIN flare_properties root_action ON root_action.owner_type = 'Flare::Span' AND root_action.owner_id = root.id AND root_action.key = 'code.function'
           #{transaction_join}
           #{where_clause}
-          ORDER BY #{span_order(sort, "s.created_at DESC")}
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -704,7 +704,7 @@ module Flare
       end
 
       # Ties on duration, like an unsorted list, read newest first.
-      def span_order(sort, newest)
+      def span_order(sort, newest = "s.created_at DESC")
         sort == "slowest" ? "(s.end_timestamp - s.start_timestamp) DESC, #{newest}" : newest
       end
 

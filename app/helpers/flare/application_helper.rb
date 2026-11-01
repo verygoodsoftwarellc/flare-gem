@@ -108,14 +108,15 @@ module Flare
     # keeping the filters and starting again from the first page.
     def duration_sort_link
       query = request.query_parameters.except("offset", "sort")
-      query = query.merge("sort" => "slowest") unless sorted_by_slowest?
-      href = [request.path, query.to_query.presence].compact.join("?")
+      label, css, title = "Duration", "sort-link", "Sort by slowest first"
 
       if sorted_by_slowest?
-        link_to "Duration \u2193", href, class: "sort-link active", title: "Back to newest first"
+        label, css, title = "Duration \u2193", "sort-link active", "Back to newest first"
       else
-        link_to "Duration", href, class: "sort-link", title: "Sort by slowest first"
+        query = query.merge("sort" => "slowest")
       end
+
+      link_to label, [request.path, query.to_query.presence].compact.join("?"), class: css, title: title
     end
 
     def format_duration(ms)
