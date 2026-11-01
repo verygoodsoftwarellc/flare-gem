@@ -74,8 +74,10 @@ module Flare
       def shape(statement)
         statement.to_s
           .gsub(%r{/\*.*?\*/}m, " ")
-          .gsub(/'(?:[^']|'')*'/, "?")
+          .gsub(/\$((?:[A-Za-z_]\w*)?)\$.*?\$\1\$/m, "?")
+          .gsub(/(?:\b[xben])?'(?:(?:[^'\\]|\\.|'')*'|(?:[^']|'')*')/i, "?")
           .gsub(/\$\d+/, "?")
+          .gsub(/\b0x\h+\b/i, "?")
           .gsub(/\b\d+(?:\.\d+)?\b/, "?")
           .gsub(/\bIN\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/i, "IN (?)")
           .gsub(/\s+/, " ")

@@ -71,6 +71,20 @@ class CLIMcpTest < Minitest::Test
     end
   end
 
+  def test_every_kind_of_literal_reads_as_a_placeholder
+    in_app do |dir|
+      db = create_database(dir)
+      root = insert_root(db, "t1", "/posts?page=2")
+      db.execute("UPDATE flare_spans SET name = ? WHERE trace_id = ?", ["GET /posts?page=2", "t1"])
+      insert_query(db, "t1", root, %q(SELECT $$one$$, $tag$two$tag$, 0xBEEF, x'AB', E'three', 'it\\'s four' FROM posts WHERE id = $1))
+      db.close
+
+      request = tool_data(dir, "get_request", trace_id: "t1")
+      assert_equal "GET /posts", request["name"]
+      assert_equal "SELECT ?, ?, ?, ?, ?, ? FROM posts WHERE id = ?", request["spans"].first["detail"]
+    end
+  end
+
   def test_last_limits_the_requests_read
     in_app do |dir|
       db = create_database(dir)

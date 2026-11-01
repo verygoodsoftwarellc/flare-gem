@@ -51,7 +51,7 @@ module Flare
         controller: props["code.namespace"],
         action: props["code.function"],
         queries: storage.count_queries_by_trace([trace_id]).fetch(trace_id, 0)).merge(
-          name: root[:name],
+          name: without_query_string(root[:name]),
           exceptions: spans.flat_map { |span| exceptions(span) },
           spans: spans.reject { |span| span[:id] == root[:id] }.map { |span| timeline_entry(span, root) },
         )
