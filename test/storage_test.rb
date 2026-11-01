@@ -4,6 +4,40 @@ require_relative "test_helper"
 require "flare/storage/sqlite"
 
 class StorageTest < Minitest::Test
+  def test_origin_separates_app_requests_from_rails_and_flare_controllers
+    with_storage do |storage, path|
+      db = SQLite3::Database.new(path)
+      controllers = {
+        "posts" => "PostsController",
+        "admin_rails" => "Admin::Rails::SettingsController",
+        "rails_named" => "RailsGuidesController",
+        "health" => "Rails::HealthController",
+        "blobs" => "ActiveStorage::Blobs::RedirectController",
+        "inbound" => "ActionMailbox::Ingresses::Relay::InboundEmailsController",
+        "flare" => "Flare::RequestsController",
+        "no_route" => nil,
+      }
+      controllers.each do |trace, controller|
+        db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('GET', 'server', ?, ?, ?, 1, 2, 'now', 'now')", [trace, trace, Flare::Storage::SQLite::MISSING_PARENT_ID])
+        span_id = db.last_insert_row_id
+        { "http.method" => "GET", "code.namespace" => controller }.compact.each do |key, value|
+          db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES (?, ?, 0, 'Flare::Span', ?, 'now', 'now')", [key, JSON.generate(value), span_id])
+        end
+      end
+      db.close
+
+      app = %w[admin_rails no_route posts rails_named]
+      rails = %w[blobs flare health inbound]
+
+      assert_equal app, storage.list_requests(origin: "app").map { |r| r[:trace_id] }.sort
+      assert_equal rails, storage.list_requests(origin: "rails").map { |r| r[:trace_id] }.sort
+      assert_equal 8, storage.list_requests.size
+      assert_equal 4, storage.count_requests(origin: "app")
+      assert_equal 4, storage.count_requests(origin: "rails")
+      assert_equal 8, storage.count_requests
+    end
+  end
+
   def test_sqlite_implements_every_base_method_with_the_same_parameters
     Flare::Storage::Base.public_instance_methods(false).each do |name|
       implementation = Flare::Storage::SQLite.instance_method(name)

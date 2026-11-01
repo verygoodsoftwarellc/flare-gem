@@ -8,12 +8,13 @@ module Flare
     class SQLite < Base
       MISSING_PARENT_ID = "0000000000000000"
 
-      # Rails framework controller prefixes to filter (lowercase/underscored format)
-      RAILS_CONTROLLER_PREFIXES = %w[
-        active_storage/
-        action_mailbox/
-        rails/
-        flare/
+      # Namespaces of the controllers that come with Rails and Flare, as stored
+      # in code.namespace (the controller's class name).
+      RAILS_CONTROLLER_NAMESPACES = %w[
+        ActiveStorage::
+        ActionMailbox::
+        Rails::
+        Flare::
       ].freeze
 
       # readonly: true opens an existing database as is, without creating
@@ -64,17 +65,7 @@ module Flare
           values << "%#{name}%"
         end
 
-        if origin
-          if origin == "rails"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(#{controller_conditions.join(" OR ")})"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          elsif origin == "app"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(controller_prop.value IS NULL OR NOT (#{controller_conditions.join(" OR ")}))"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          end
-        end
+        add_origin_condition(origin, conditions, values)
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
         values << limit
@@ -392,17 +383,7 @@ module Flare
           values << "%#{name}%"
         end
 
-        if origin
-          if origin == "rails"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(#{controller_conditions.join(" OR ")})"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          elsif origin == "app"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(controller_prop.value IS NULL OR NOT (#{controller_conditions.join(" OR ")}))"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          end
-        end
+        add_origin_condition(origin, conditions, values)
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
 
@@ -789,6 +770,15 @@ module Flare
           properties: {},
           events: []
         }
+      end
+
+      def add_origin_condition(origin, conditions, values)
+        return unless %w[app rails].include?(origin)
+
+        # Property values are stored as JSON, so a class name starts with a quote.
+        framework = "(#{RAILS_CONTROLLER_NAMESPACES.map { "controller_prop.value LIKE ?" }.join(" OR ")})"
+        conditions << (origin == "rails" ? framework : "(controller_prop.value IS NULL OR NOT #{framework})")
+        values.concat(RAILS_CONTROLLER_NAMESPACES.map { |namespace| "\"#{namespace}%" })
       end
 
       def row_to_request(row)
