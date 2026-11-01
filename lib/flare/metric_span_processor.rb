@@ -327,10 +327,10 @@ module Flare
     end
 
     def extract_db_operation(span, db_system, statement)
-      operation = SqlMask.command_word(span.attributes["db.operation"])
+      operation = SqlMask.operation_word(span.attributes["db.operation"])
 
       if db_system == "redis"
-        (operation || SqlMask.command_word(span.name.to_s.split.last))&.downcase || "query"
+        (operation || SqlMask.operation_word(span.name.to_s.split.last))&.downcase || "query"
       elsif SqlMask.sql_system?(db_system)
         operation&.upcase || extract_sql_operation(statement) || "query"
       else

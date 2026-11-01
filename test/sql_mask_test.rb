@@ -114,6 +114,7 @@ class SqlMaskTest < Minitest::Test
       'UPDATE "posts" SET "title" = ?' => 'UPDATE "posts" SET ? = ?',
       'SELECT "x" FROM "a" JOIN "b"' => 'SELECT ? FROM "a" JOIN "b"',
       'SELECT "x from hunter2" FROM t' => "SELECT ? FROM t",
+      %(SELECT a FROM\n  "posts") => 'SELECT a FROM "posts"',
       'SELECT 1 WHERE a = "hunter2"' => "SELECT ? WHERE a = ?",
       'SELECT a FROM t WHERE b = "hunter2"."c' => "SELECT a FROM t WHERE b = ?.?",
     }.each { |sql, expected| assert_equal expected, mask(sql, "sqlite"), sql }

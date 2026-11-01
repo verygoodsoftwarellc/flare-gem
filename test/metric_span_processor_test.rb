@@ -38,6 +38,7 @@ class MetricSpanProcessorTest < Minitest::Test
       { "db.system" => "mystery", "db.statement" => "hunter2 x" } => ["unknown", "query"],
       { "db.system" => "etcd", "db.statement" => "PUT x", "db.operation" => "hunter2 x" } => ["unknown", "PUT"],
       { "db.system" => "etcd", "db.operation" => "get" } => ["unknown", "GET"],
+      { "db.system" => "etcd", "db.operation" => "secret word" } => ["unknown", "query"],
       { "db.system" => "etcd", "db.name" => "main", "db.statement" => "GET x" } => ["main", "GET"],
     }.each do |attributes, expected|
       @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: attributes, start_ns: 0, end_ns: 1_000_000))

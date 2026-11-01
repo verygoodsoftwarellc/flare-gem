@@ -65,11 +65,14 @@ module Flare
     # as a key and value. key holds a pair's name; separator ends where its value
     # starts.
     TEXT_TOKEN = %r{
-      (?<url>(?:[a-z][a-z0-9+.-]*:|(?<![\w:/]))//[^\s'"<>]+)
-      |(?<auth>\b(?:bearer\s+\S+|basic\s+[A-Za-z0-9+/=]{8,}))
-      |(?<quote>["']?)(?<key>[\w.\-\[\]%]+)\k<quote>(?<separator>\s*(?:=>|=|:)\s*)
+      (?<![\w.+\-\[\]%])
+      (?:
+        (?<url>(?:[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
+        |(?<auth>(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))
+        |(?<quote>["']?)(?<key>[\w.\-\[\]%]++)\k<quote>\s*+(?:=>|=|:)\s*+
+      )
     }xi
-    VALUE = /\A[^\s&;,]*/
+    VALUE = /\G[^\s&;,]*+/
     NESTED_VALUE = %r{=|%3d|//|%2f%2f|@|%40}i
 
     class << self
@@ -133,7 +136,7 @@ module Flare
 
     def text_attribute(name, value, system)
       return statement(value, system) if STATEMENTS.include?(name)
-      return SqlMask.command_word(value) || SqlMask::PLACEHOLDER if OPERATIONS.include?(name)
+      return SqlMask.operation_word(value) || SqlMask::PLACEHOLDER if OPERATIONS.include?(name)
 
       text = clean(value)
       if URLS.include?(name) then url(text)
@@ -218,7 +221,9 @@ module Flare
     # more than it needs to rather than guess where a value ends.
     def free_text(text)
       return FILTERED if STRUCTURED_TEXT.match?(text)
-      return SqlMask.mask(text) if SQL_TEXT.match?(text)
+      # What's left of SQL is still read for pairs, since a word like DROP can also
+      # start ordinary text.
+      text = SqlMask.mask(text) if SQL_TEXT.match?(text)
 
       out = +""
       position = 0
@@ -230,7 +235,7 @@ module Flare
         elsif match[:auth] then out << match[:auth].split(/\s+/).first << " " << FILTERED
         else
           out << match[0]
-          value = text[position..][VALUE]
+          value = VALUE.match(text, position)[0]
           next if pair_kept?(match[:key], value)
 
           out << FILTERED

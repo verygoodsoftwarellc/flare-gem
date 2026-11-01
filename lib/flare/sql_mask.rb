@@ -32,7 +32,8 @@ module Flare
     HASH_COMMENTS = /mysql|trilogy|maria|tidb|vitess/i
 
     COMMAND_WORD = /\A\s*([A-Za-z][A-Za-z_.]{0,31})(?=\s|\z)/
-    NAME_POSITION = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE) |\.)\z/ni
+    OPERATION_WORD = /\A[A-Za-z][A-Za-z_.]{0,31}\z/
+    NAME_POSITION = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+|\.)\z/ni
     DOUBLE_QUOTED = /"[^"]*+(?:""[^"]*+)*+"/n
     QUALIFIER = /#{DOUBLE_QUOTED.source}(?=\.(?:\*|\w|#{DOUBLE_QUOTED.source}))/n
 
@@ -71,6 +72,11 @@ module Flare
     # The first word of a statement, if it could be a command name. Nil otherwise.
     def command_word(statement)
       statement.to_s[COMMAND_WORD, 1]
+    end
+
+    # The value if all of it could be an operation name. Nil otherwise.
+    def operation_word(value)
+      value.to_s[OPERATION_WORD]
     end
 
     def mask(statement, system = nil)
@@ -141,7 +147,7 @@ module Flare
     # A quoted word right after FROM and the like, or either side of a dot, can
     # only be a name.
     def sqlite_name(scanner, out)
-      tail = out.byteslice(-8, 8) || out
+      tail = out.byteslice(-32, 32) || out
       NAME_POSITION.match?(tail) ? scanner.scan(DOUBLE_QUOTED) : scanner.scan(QUALIFIER)
     end
 
