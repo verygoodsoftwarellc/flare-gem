@@ -83,8 +83,14 @@ class ExportFilterTest < Minitest::Test
   def test_non_sql_stores_keep_only_the_command
     attrs = @filter.attributes("db.system" => "redis", "db.statement" => "AUTH hunter2")
     assert_equal "AUTH ?", attrs["db.statement"]
-    attrs = @filter.attributes("db.system" => "mongodb", "db.statement" => '{"find":"hunter2"}')
+    attrs = @filter.attributes("db.system" => "mongodb", "db.statement" => '{"find":"users","filter":{"email":"hunter2"}}')
+    assert_equal '{"find":"users","filter":{"email":"?"}}', attrs["db.statement"]
+    attrs = @filter.attributes("db.system.name" => "mongodb", "db.query.text" => '{"find":"users","filter":{"n":{"$in":["hunter2","hunter3"]}}}')
+    assert_equal '{"find":"users","filter":{"n":{"$in":["?"]}}}', attrs["db.query.text"]
+    attrs = @filter.attributes("db.system" => "mongodb", "db.statement" => "not json hunter2")
     assert_equal "?", attrs["db.statement"]
+    attrs = @filter.attributes("db.system" => "redis", "db.statement" => "SET session:hunter2 hunter2")
+    assert_equal "SET session:?", attrs["db.statement"]
   end
 
   def test_mail_job_and_exception_contents_are_left_out
@@ -177,8 +183,8 @@ class ExportFilterTest < Minitest::Test
 
   def test_statements_for_systems_that_are_not_known_sql_keep_only_the_command
     {
-      "etcd" => ["PUT hunter2", "PUT ?"], "cassandra" => ["SELECT * FROM hunter2", "SELECT ?"], "neo4j" => [%(MATCH (n {p:"hunter2"})), "MATCH ?"],
-      "couchbase" => [%({"a":"hunter2"}), "?"], "snowflake" => ["SELECT 1 // hunter2", "SELECT ?"], "clickhouse" => ["SELECT 1 # hunter2", "SELECT ?"], "mystery" => ["hunter2 x", "?"], "memcached" => ["set hunter2", "set ?"],
+      "etcd" => ["PUT hunter2", "PUT ?"], "neo4j" => [%(MATCH (n {p:"hunter2"})), "MATCH ?"],
+      "couchbase" => [%({"a":"hunter2"}), "?"], "mystery" => ["hunter2 x", "?"], "memcached" => ["set hunter2", "set ?"],
     }.each do |system, (statement, expected)|
       assert_equal expected, @filter.attributes("db.system" => system, "db.statement" => statement)["db.statement"], system
     end
@@ -213,6 +219,17 @@ class ExportFilterTest < Minitest::Test
     assert_equal "find", filtered("db.operation.name", "find")
     assert_equal "?", filtered("db.operation", "hunter2 x")
     assert_equal "?", filtered("db.operation.name", "a b")
+  end
+
+  def test_sql_like_systems_are_masked_as_sql
+    {
+      "clickhouse" => ["SELECT count() FROM events WHERE user = 'hunter2'", "SELECT count() FROM events WHERE user = ?"],
+      "cassandra" => [%q(SELECT * FROM events WHERE a = 'hunter2' AND b = "hunter2"), "SELECT * FROM events WHERE a = ? AND b = ?"],
+      "snowflake" => ["SELECT a FROM t // hunter2\nWHERE b = $$hunter2$$", "SELECT a FROM t WHERE b = ?"],
+      "bigquery" => ["SELECT a FROM `p.d.t` # hunter2\nWHERE b = \"hunter2\"", "SELECT a FROM `p.d.t` WHERE b = ?"],
+    }.each do |system, (statement, expected)|
+      assert_equal expected, @filter.attributes("db.system" => system, "db.statement" => statement)["db.statement"], system
+    end
   end
 
   def test_sql_systems_are_masked_as_sql

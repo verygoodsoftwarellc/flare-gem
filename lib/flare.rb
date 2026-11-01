@@ -10,6 +10,7 @@ require_relative "flare/source_location"
 require_relative "flare/metric_key"
 require_relative "flare/metric_storage"
 require_relative "flare/metric_span_processor"
+require_relative "flare/redis_statement_processor"
 require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
@@ -199,6 +200,9 @@ module Flare
     OpenTelemetry::SDK.configure do |c|
       c.service_name = service_name
 
+      # Reads Redis statements as spans start, so raw arguments don't reach a finished span.
+      c.add_span_processor(RedisStatementProcessor.new)
+
       # Spans: detailed trace data stored in SQLite
       if configuration.spans_enabled && exporter
         c.add_span_processor(span_processor)
@@ -218,6 +222,11 @@ module Flare
 
             configuration.ignore_request.call(request)
           }
+        },
+        # The key is what groups Redis calls. RedisStatementProcessor reduces the
+        # statement to the command and the key's first segment.
+        "OpenTelemetry::Instrumentation::Redis" => {
+          db_statement: :include,
         },
         # Name Sidekiq job spans after the worker class (e.g. "MyWorker
         # process") instead of the upstream default of the queue name

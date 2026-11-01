@@ -126,9 +126,28 @@ class SqlMaskTest < Minitest::Test
     }.each { |sql, expected| assert_equal expected, mask(sql, "sqlite"), sql }
   end
 
+  def test_sql_like_systems_read_every_quote_as_a_value
+    %w[cassandra clickhouse bigquery snowflake].each do |system|
+      assert_equal "SELECT ?, ? FROM t", mask(%q(SELECT 'hunter2', "hunter2" FROM t), system), system
+      assert_equal "SELECT ?", mask(%q(SELECT "hunter2 FROM t), system), system
+      assert_equal "SELECT a FROM t", mask("SELECT a # hunter2\nFROM t // hunter2", system), system
+      assert_equal "SELECT a / b", mask("SELECT a / b", system), system
+      assert_equal "SELECT a", mask("SELECT a // it's hunter2", system), system
+    end
+  end
+
+  def test_backticks_are_names_only_where_known
+    %w[clickhouse bigquery].each { |system| assert_equal "SELECT `a` FROM t", mask("SELECT `a` FROM t", system), system }
+    %w[cassandra snowflake].each do |system|
+      assert_equal "SELECT ? FROM t", mask("SELECT `hunter2` FROM t", system), system
+      assert_equal "SELECT ?", mask("SELECT `hunter2 FROM t", system), system
+    end
+  end
+
   def test_sql_system_classifier
     %w[postgresql postgis mysql2 trilogy mariadb sqlite sqlite3 cockroachdb sqlserver mssql oracle oracleenhanced db2].each { |system| assert Flare::SqlMask.sql_system?(system), system }
-    ["redis", "mongodb", "memcached", "elasticsearch", "cassandra", "etcd", "nosql", "mystery", "clickhouse", "bigquery", "snowflake"].each { |system| refute Flare::SqlMask.sql_system?(system), system }
+    ["redis", "mongodb", "memcached", "elasticsearch", "etcd", "nosql", "mystery"].each { |system| refute Flare::SqlMask.sql_system?(system), system }
+    %w[cassandra clickhouse bigquery snowflake].each { |system| assert Flare::SqlMask.sql_system?(system), system }
     assert Flare::SqlMask.sql_system?(nil)
     assert Flare::SqlMask.sql_system?("")
   end

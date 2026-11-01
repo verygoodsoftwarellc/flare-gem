@@ -23,6 +23,12 @@ module Flare
     # every quote treated as a value.
     SQL_SYSTEMS = /postgres|postgis|mysql|trilogy|maria|sqlite|cockroach|sqlserver|mssql|oracle|db2/i
 
+    # Close enough to SQL to mask, with rules that vary: every quoted string counts
+    # as a value, and # and // start comments that run to the end of the line.
+    # Backticks hold names only where that's known.
+    SQL_LIKE_SYSTEMS = /cassandra|clickhouse|bigquery|snowflake/i
+    BACKTICK_NAMES = /clickhouse|bigquery/i
+
     # Double quotes hold names on these. On MySQL they hold values, and elsewhere
     # they're treated as values too. SQLite reads them as values when no such
     # column exists, so it keeps them only in places that can't hold a value.
@@ -46,32 +52,31 @@ module Flare
     NUMBER = /\.?\d[\w.\x80-\xff]*+(?:(?<=[eE])[+-]\d++)?/n
     DOLLAR_OTHER = /\$\d*+/n
     DOLLAR_TAG = /\$(?:[A-Za-z_\x80-\xff][\w\x80-\xff]*+)?\$/n
-    LINE_COMMENT = /(?:--|#)[^\n]*+/n
+    LINE_COMMENT = /(?:--|#|\/\/)[^\n]*+/n
     COMMENT_START = %r{/\*}n
     COMMENT_EDGE = %r{/\*|\*/}n
     LITERAL_PREFIX = /\A(?:[xXbBnNeE]|_\w+)\z/n
+    LITERAL_RUNS = { "'" => /[^'\\]*+/n, '"' => /[^"\\]*+/n, "`" => /[^`\\]*+/n }.freeze
     IN_LIST = /\bIN ?\( ?\?(?: ?, ?\?)* ?\)/ni
     OTHER_WHITESPACE = "\t\n\r\f\v"
 
     # A run of tokens that are copied as they are, matched in one go because most
     # of a statement is this. It stops at anything that needs a decision: a quote,
     # a number, a $, a comment, or a word that may be a literal's prefix.
-    plain = <<~'PATTERN'.delete("\n")
-      [A-Za-z_\x80-\xff][\w$\x80-\xff]*+(?!')
-      |[^\w\x80-\xff'"`$#./-]++
-      |`[^`]*+(?:``[^`]*+)*+`
-      |\.(?!\d)
-      |-(?!-)
-      |/(?!\*)
-    PATTERN
+    word = %q{[A-Za-z_\x80-\xff][\w$\x80-\xff]*+(?!')}
+    other = %q{[^\w\x80-\xff'"`$#./-]++|\.(?!\d)|-(?!-)}
+    backtick = "`[^`]*+(?:``[^`]*+)*+`"
+    plain = "#{word}|#{other}|#{backtick}|/(?!\\*)"
     PLAIN = Regexp.new("(?:#{plain})++", Regexp::NOENCODING)
     PLAIN_NAMES = Regexp.new(%((?:#{plain}|#{DOUBLE_QUOTED.source}|#)++), Regexp::NOENCODING)
     PLAIN_HASH = Regexp.new("(?:#{plain}|#)++", Regexp::NOENCODING)
+    PLAIN_LIKE = Regexp.new("(?:#{word}|#{other}|/(?![*/]))++", Regexp::NOENCODING)
+    PLAIN_LIKE_BACKTICKS = Regexp.new("(?:#{word}|#{other}|#{backtick}|/(?![*/]))++", Regexp::NOENCODING)
 
     module_function
 
     def sql_system?(system)
-      system.to_s.empty? || SQL_SYSTEMS.match?(system.to_s)
+      system.to_s.empty? || SQL_SYSTEMS.match?(system.to_s) || SQL_LIKE_SYSTEMS.match?(system.to_s)
     end
 
     # The first word of a statement, if it could be a command name. Nil otherwise.
@@ -99,7 +104,8 @@ module Flare
 
     def scan(scanner, system)
       sqlite = SQLITE.match?(system)
-      plain = if DOUBLE_QUOTED_NAMES.match?(system) then PLAIN_NAMES
+      plain = if SQL_LIKE_SYSTEMS.match?(system) then BACKTICK_NAMES.match?(system) ? PLAIN_LIKE_BACKTICKS : PLAIN_LIKE
+      elsif DOUBLE_QUOTED_NAMES.match?(system) then PLAIN_NAMES
       elsif system.empty? || HASH_COMMENTS.match?(system) then PLAIN
       else PLAIN_HASH
       end
@@ -137,12 +143,17 @@ module Flare
         else mask_literal(scanner, out)
         end
       when "`"
-        # Likewise: only an unterminated name gets here.
-        mask_rest(scanner, out)
+        # Likewise, where backticks are names.
+        plain == PLAIN_LIKE ? mask_literal(scanner, out) : mask_rest(scanner, out)
       when "$"
         mask_dollar(scanner, out)
       when "/"
-        skip_comment(scanner, out)
+        if scanner.check(COMMENT_START)
+          skip_comment(scanner, out)
+        else
+          scanner.skip(LINE_COMMENT)
+          out << " "
+        end
       else # -- or, where it starts a comment, #
         scanner.skip(LINE_COMMENT)
         out << " "
@@ -175,7 +186,7 @@ module Flare
     # literal counts as unterminated. Only E'' strings say for themselves.
     def mask_literal(scanner, out, backslash_escapes: false)
       quote = scanner.getch
-      plain = quote == "'" ? /[^'\\]*+/n : /[^"\\]*+/n
+      plain = LITERAL_RUNS.fetch(quote)
       out << PLACEHOLDER
 
       loop do

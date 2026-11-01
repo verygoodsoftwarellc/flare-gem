@@ -6,6 +6,7 @@ require "set"
 require "uri"
 
 require_relative "sql_mask"
+require_relative "store_statement"
 require_relative "utf8"
 
 module Flare
@@ -54,7 +55,8 @@ module Flare
 
     URLS = %w[http.url url.full url.path http.target http.referer url.original].to_set.freeze
     HOSTS = %w[http.host server.address net.peer.name].to_set.freeze
-    CACHE_NAMESPACE = /\A[A-Za-z][A-Za-z_-]{0,40}(?=[\/:])/
+    REDIS = /redis|valkey/i
+    MONGO = /mongo/i
 
     URL_START = %r{\A((?:[a-z][a-z0-9+.-]*:)?//)([^/?#]*)(.*)\z}im
     NUMERIC_PORT = /\A(?:\[[^\]]*\]|[^:]*)(?::\d*)?\z/
@@ -145,7 +147,7 @@ module Flare
       if URLS.include?(name) then url(text)
       elsif HOSTS.include?(name) then text.sub(/\A.*@/m, "")
       elsif name == "url.query" then query_string(text)
-      elsif name == "key" then cache_key(text)
+      elsif name == "key" then StoreStatement.masked_key(text)
       elsif param_kept?(name, text) then free_text(text)
       else FILTERED
       end
@@ -156,6 +158,9 @@ module Flare
     end
 
     def statement(text, system)
+      return StoreStatement.redis(text) if REDIS.match?(system.to_s)
+      return StoreStatement.mongo(text) if MONGO.match?(system.to_s)
+
       unless SqlMask.sql_system?(system)
         command = SqlMask.command_word(clean(text))
         return command ? "#{command} #{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
@@ -211,13 +216,6 @@ module Flare
       path = key.split(/[\[\]]+/).reject(&:empty?)
       nested = path.reverse.inject(value) { |inner, part| { part => inner } }
       @parameter_filter.filter(nested) == nested
-    end
-
-    # Keeps the leading word of a key like views/posts/1-abc or rack:attack:1.2.3.4,
-    # so a trace still shows what kind of entry it was.
-    def cache_key(text)
-      namespace = text[CACHE_NAMESPACE]
-      namespace ? "#{namespace}#{text[namespace.length]}#{SqlMask::PLACEHOLDER}" : SqlMask::PLACEHOLDER
     end
 
     # Text with no known meaning: custom notification payloads, span names. Masks

@@ -33,7 +33,11 @@ class MetricSpanProcessorTest < Minitest::Test
 
   def test_non_sql_systems_get_no_names_from_the_statement
     {
-      { "db.system" => "cassandra", "db.statement" => "SELECT * FROM hunter2" } => ["unknown", "SELECT"],
+      { "db.system" => "clickhouse", "db.statement" => "SELECT 'x from hunter2' FROM events" } => ["events", "SELECT"],
+      { "db.system" => "cassandra", "db.statement" => "SELECT * FROM events WHERE a = 'x'" } => ["events", "SELECT"],
+      { "db.system" => "snowflake", "db.statement" => %(SELECT 1 FROM "hunter2") } => ["unknown", "SELECT"],
+      { "db.system" => "mongodb", "db.operation" => "find", "db.mongodb.collection" => "users", "db.statement" => %({"filter":{"a":"?"}}) } => ["users", "FIND"],
+      { "db.system" => "mongodb", "db.statement" => %({"find":"hunter2"}) } => ["unknown", "query"],
       { "db.system" => "couchbase", "db.statement" => %({"a":"hunter2"}) } => ["unknown", "query"],
       { "db.system" => "mystery", "db.statement" => "hunter2 x" } => ["unknown", "query"],
       { "db.system" => "etcd", "db.statement" => "PUT x", "db.operation" => "hunter2 x" } => ["unknown", "PUT"],

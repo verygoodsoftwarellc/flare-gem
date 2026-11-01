@@ -320,6 +320,8 @@ module Flare
         # Prefer the table name from attributes. Only SQL statements are parsed
         # for one; statement is nil for anything else.
         span.attributes["db.sql.table"] ||
+          span.attributes["db.mongodb.collection"] ||
+          span.attributes["db.collection.name"] ||
           extract_sql_table(statement) ||
           span.attributes["db.name"] ||
           "unknown"
