@@ -178,21 +178,21 @@ class ExportFilterTest < Minitest::Test
   def test_statements_for_systems_that_are_not_known_sql_keep_only_the_command
     {
       "etcd" => ["PUT hunter2", "PUT ?"], "cassandra" => ["SELECT * FROM hunter2", "SELECT ?"], "neo4j" => [%(MATCH (n {p:"hunter2"})), "MATCH ?"],
-      "couchbase" => [%({"a":"hunter2"}), "?"], "mystery" => ["hunter2 x", "?"], "memcached" => ["set hunter2", "set ?"],
+      "couchbase" => [%({"a":"hunter2"}), "?"], "snowflake" => ["SELECT 1 // hunter2", "SELECT ?"], "clickhouse" => ["SELECT 1 # hunter2", "SELECT ?"], "mystery" => ["hunter2 x", "?"], "memcached" => ["set hunter2", "set ?"],
     }.each do |system, (statement, expected)|
       assert_equal expected, @filter.attributes("db.system" => system, "db.statement" => statement)["db.statement"], system
     end
   end
 
   def test_pairs_are_found_after_any_punctuation_and_in_sql_looking_text
-    ["GET /token=hunter2", "foo::token=hunter2", "DROP token=hunter2", "SHOW password: hunter2", "CALL secret=hunter2"].each do |value|
+    ["GET /token=hunter2", "foo::token=hunter2", "foo+token=hunter2", "auth.Bearer hunter2", "DROP token=hunter2", "SHOW password: hunter2", "CALL secret=hunter2"].each do |value|
       refute_includes filtered("note", value), "hunter2", value
       refute_includes @filter.name(value), "hunter2", value
     end
   end
 
   def test_scanning_text_stays_bounded
-    ["a" * 100_000, "a:" * 100_000, "a=1 " * 30_000, "https://" * 10_000, "." * 100_000].each do |value|
+    ["a" * 100_000, "a:" * 100_000, "a=1 " * 30_000, "a." * 50_000, "https://" * 10_000, "." * 100_000].each do |value|
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       filtered("note", value)
       assert_operator Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, :<, 1, value[0, 10]

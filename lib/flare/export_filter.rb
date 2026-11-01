@@ -65,7 +65,7 @@ module Flare
     # as a key and value. key holds a pair's name; separator ends where its value
     # starts.
     TEXT_TOKEN = %r{
-      (?<![\w.+\-\[\]%])
+      (?<!\w)
       (?:
         (?<url>(?:[a-z][a-z0-9+.-]*+:)?//[^\s'"<>]++)
         |(?<auth>(?:bearer\s+\S++|basic\s+[A-Za-z0-9+/=]{8,}+))

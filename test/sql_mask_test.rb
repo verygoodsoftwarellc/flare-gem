@@ -114,6 +114,8 @@ class SqlMaskTest < Minitest::Test
       'UPDATE "posts" SET "title" = ?' => 'UPDATE "posts" SET ? = ?',
       'SELECT "x" FROM "a" JOIN "b"' => 'SELECT ? FROM "a" JOIN "b"',
       'SELECT "x from hunter2" FROM t' => "SELECT ? FROM t",
+      'SELECT a FROM t WHERE b IS DISTINCT FROM "hunter2"' => "SELECT a FROM t WHERE b IS DISTINCT FROM ?",
+      %(SELECT a FROM t WHERE b is distinct  from\n"hunter2") => "SELECT a FROM t WHERE b is distinct from ?",
       %(SELECT a FROM\n  "posts") => 'SELECT a FROM "posts"',
       'SELECT 1 WHERE a = "hunter2"' => "SELECT ? WHERE a = ?",
       'SELECT a FROM t WHERE b = "hunter2"."c' => "SELECT a FROM t WHERE b = ?.?",
@@ -121,8 +123,8 @@ class SqlMaskTest < Minitest::Test
   end
 
   def test_sql_system_classifier
-    %w[postgresql postgis mysql2 trilogy mariadb sqlite sqlite3 cockroachdb sqlserver mssql oracle oracleenhanced db2 clickhouse].each { |system| assert Flare::SqlMask.sql_system?(system), system }
-    ["redis", "mongodb", "memcached", "elasticsearch", "cassandra", "etcd", "nosql", "mystery"].each { |system| refute Flare::SqlMask.sql_system?(system), system }
+    %w[postgresql postgis mysql2 trilogy mariadb sqlite sqlite3 cockroachdb sqlserver mssql oracle oracleenhanced db2].each { |system| assert Flare::SqlMask.sql_system?(system), system }
+    ["redis", "mongodb", "memcached", "elasticsearch", "cassandra", "etcd", "nosql", "mystery", "clickhouse", "bigquery", "snowflake"].each { |system| refute Flare::SqlMask.sql_system?(system), system }
     assert Flare::SqlMask.sql_system?(nil)
     assert Flare::SqlMask.sql_system?("")
   end

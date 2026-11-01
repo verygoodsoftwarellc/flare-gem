@@ -21,18 +21,19 @@ module Flare
     # Systems known to speak SQL. Anything else may not follow its quoting rules,
     # so callers keep only a command word. No system at all is read as SQL, with
     # every quote treated as a value.
-    SQL_SYSTEMS = /postgres|postgis|mysql|trilogy|maria|sqlite|cockroach|sqlserver|mssql|oracle|db2|clickhouse|redshift|timescale|tidb|vitess|snowflake|bigquery/i
+    SQL_SYSTEMS = /postgres|postgis|mysql|trilogy|maria|sqlite|cockroach|sqlserver|mssql|oracle|db2/i
 
     # Double quotes hold names on these. On MySQL they hold values, and elsewhere
     # they're treated as values too. SQLite reads them as values when no such
     # column exists, so it keeps them only in places that can't hold a value.
     # MySQL also starts comments with #, which is an operator on Postgres.
-    DOUBLE_QUOTED_NAMES = /postgres|postgis|cockroach|oracle|db2|redshift|timescale|snowflake/i
+    DOUBLE_QUOTED_NAMES = /postgres|postgis|cockroach|oracle|db2/i
     SQLITE = /sqlite/i
-    HASH_COMMENTS = /mysql|trilogy|maria|tidb|vitess/i
+    HASH_COMMENTS = /mysql|trilogy|maria/i
 
     COMMAND_WORD = /\A\s*([A-Za-z][A-Za-z_.]{0,31})(?=\s|\z)/
     OPERATION_WORD = /\A[A-Za-z][A-Za-z_.]{0,31}\z/
+    NOT_A_TABLE = /\bDISTINCT\s+FROM\s+\z/ni
     NAME_POSITION = /(?:\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+|\.)\z/ni
     DOUBLE_QUOTED = /"[^"]*+(?:""[^"]*+)*+"/n
     QUALIFIER = /#{DOUBLE_QUOTED.source}(?=\.(?:\*|\w|#{DOUBLE_QUOTED.source}))/n
@@ -148,7 +149,11 @@ module Flare
     # only be a name.
     def sqlite_name(scanner, out)
       tail = out.byteslice(-32, 32) || out
-      NAME_POSITION.match?(tail) ? scanner.scan(DOUBLE_QUOTED) : scanner.scan(QUALIFIER)
+      if NAME_POSITION.match?(tail) && !NOT_A_TABLE.match?(tail)
+        scanner.scan(DOUBLE_QUOTED)
+      else
+        scanner.scan(QUALIFIER)
+      end
     end
 
     def mask_rest(scanner, out)
