@@ -37,7 +37,7 @@ module Flare
     SQLITE = /sqlite/i
     HASH_COMMENTS = /mysql|trilogy|maria/i
 
-    COMMAND_WORD = /\A\s*([A-Za-z][A-Za-z_.]{0,31})(?=\s|\z)/
+    COMMAND_WORD = /\A\s*([A-Z][A-Z_.]{0,31}|[a-z][a-z_.]{0,31})(?=\s|\z)/
     OPERATION_WORD = /\A[A-Za-z][A-Za-z_.]{0,31}\z/
     # Decided from a short tail of the output, so anything spaced too widely to see
     # in it isn't a name. FROM counts only with the word before it in view, because

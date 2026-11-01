@@ -156,7 +156,7 @@ class SqlMaskTest < Minitest::Test
     assert_equal "AUTH", Flare::SqlMask.command_word(" AUTH hunter2")
     assert_equal "ping", Flare::SqlMask.command_word("ping")
     assert_equal "cluster.info", Flare::SqlMask.command_word("cluster.info x")
-    ["hunter2 x", %({"a":"b"}), "", nil, "a" * 40, "a:b c"].each { |value| assert_nil Flare::SqlMask.command_word(value), value.inspect }
+    ["hunter2 x", %({"a":"b"}), "", nil, "a" * 40, "a:b c", "Hunter x", "mixedCase x"].each { |value| assert_nil Flare::SqlMask.command_word(value), value.inspect }
   end
 
   def test_double_quotes_are_values_when_the_system_is_unknown
