@@ -16,6 +16,8 @@ module Flare
     DEFAULT_LIMIT = 10
     MINIMUM_REPEATS = 2
     # What Active Record names its own bookkeeping, which repeats by design.
+    # Transaction statements from elsewhere have no name, so they're also
+    # matched by their text.
     IGNORED_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
     def initialize(argv)
@@ -69,7 +71,10 @@ module Flare
 
     def query?(span)
       props = span[:properties]
-      props["db.statement"] && !IGNORED_QUERY_NAMES.include?(props["name"])
+      statement = props["db.statement"]
+      return false unless statement
+
+      !IGNORED_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
     end
 
     # The statement with its values taken out, so one query run with different

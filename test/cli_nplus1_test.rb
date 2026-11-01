@@ -61,6 +61,7 @@ class CLINplus1Test < Minitest::Test
       2.times do
         insert_query(db, "t1", root, "BEGIN immediate TRANSACTION", name: "TRANSACTION")
         insert_query(db, "t1", root, "PRAGMA table_xinfo(\"posts\")", name: "SCHEMA")
+        insert_query(db, "t1", root, "COMMIT", name: nil)
       end
       db.close
 
@@ -151,7 +152,7 @@ class CLINplus1Test < Minitest::Test
   end
 
   def insert_query(db, trace, root, statement, ms: 1, name: "Post Load", file: nil, line: nil)
-    properties = { "db.statement" => statement, "name" => name }
+    properties = { "db.statement" => statement, "name" => name }.compact
     properties.merge!("code.filepath" => file, "code.lineno" => line) if file
     insert_span(db, trace: trace, name: "sql.active_record", kind: "internal", parent: root, ns: (ms * 1_000_000).to_i, at: Time.now, properties: properties)
   end
