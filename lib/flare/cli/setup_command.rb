@@ -10,10 +10,12 @@ require "json"
 require "fileutils"
 require "timeout"
 require_relative "output"
+require_relative "project"
 
 module Flare
   class SetupCommand
     include CLI::Output
+    include CLI::Project
 
     DEFAULT_HOST = "https://flare.am"
     TIMEOUT_SECONDS = 300 # 5 minutes
@@ -377,7 +379,7 @@ module Flare
       contents = File.read(gitignore_path)
       entries_to_add = []
 
-      entries_to_add << ".env" if @saved_to_dotenv && !contents.match?(/^\.env$/)
+      entries_to_add << ".env" if @saved_to_dotenv && !env_ignored?(contents)
       entries_to_add << "flare.sqlite3*" unless contents.include?("flare.sqlite3*")
 
       return if entries_to_add.empty?

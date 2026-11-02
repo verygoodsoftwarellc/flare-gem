@@ -180,6 +180,16 @@ class SetupCommandGitignoreTest < Minitest::Test
     refute_includes out, "Added"
   end
 
+  def test_skips_env_when_a_new_rails_app_already_ignores_it
+    File.write(File.join(@dir, ".gitignore"), "/.env*\nflare.sqlite3*\n")
+
+    cmd = Flare::SetupCommand.new
+    cmd.instance_variable_set(:@saved_to_dotenv, true)
+    capture_io { cmd.send(:add_gitignore_entries) }
+
+    assert_equal "/.env*\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+  end
+
   def test_does_nothing_without_gitignore
     cmd = Flare::SetupCommand.new(force: false)
     out, = capture_io { cmd.send(:add_gitignore_entries) }
@@ -315,6 +325,44 @@ class DoctorCommandTest < Minitest::Test
     assert_includes out, "FLARE_KEY configured"
     assert_includes out, ".gitignore entries present"
     assert_includes out, "looks good"
+  end
+
+  # The rule a new Rails app's .gitignore has.
+  def test_accepts_env_rule_from_a_new_rails_app
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.env*\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
+    refute_includes out, ".gitignore missing"
+  end
+
+  def test_warns_when_env_exists_and_is_not_ignored
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.environment\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore missing: .env"
+  end
+
+  def test_warns_when_a_later_rule_stops_ignoring_env
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.env*\n!.env\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore missing: .env"
+  end
+
+  # Setup only adds .env when it saved the token there, so it couldn't fix this.
+  def test_does_not_ask_for_env_rule_without_an_env_file
+    File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
   end
 
   def test_missing_initializer
@@ -463,6 +511,25 @@ class StatusCommandTest < Minitest::Test
     cmd = Flare::StatusCommand.new
     out, = capture_io { cmd.run }
     assert_includes out, "not configured"
+  end
+
+  def test_shows_key_may_be_in_credentials
+    FileUtils.mkdir_p(File.join(@dir, "config"))
+    File.write(File.join(@dir, "config/credentials.yml.enc"), "encrypted")
+
+    out, = capture_io { Flare::StatusCommand.new.run }
+
+    assert_includes out, "may be in Rails credentials"
+    refute_includes out, "not configured"
+  end
+
+  def test_shows_key_may_be_in_environment_credentials
+    FileUtils.mkdir_p(File.join(@dir, "config/credentials"))
+    File.write(File.join(@dir, "config/credentials/development.yml.enc"), "encrypted")
+
+    out, = capture_io { Flare::StatusCommand.new.run }
+
+    assert_includes out, "may be in Rails credentials"
   end
 
   def test_shows_file_statuses
