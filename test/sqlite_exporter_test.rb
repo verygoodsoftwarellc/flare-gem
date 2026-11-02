@@ -3,6 +3,7 @@
 require_relative "test_helper"
 require "flare/sqlite_exporter"
 require "flare/storage/sqlite"
+require "time"
 
 class SQLiteExporterTest < Minitest::Test
   def setup
@@ -291,7 +292,78 @@ class SQLiteExporterTest < Minitest::Test
     assert File.exist?(nested_path)
   end
 
+  # New York clocks read 1:50 then 1:05 on the fall change, 15 minutes apart,
+  # and 1:50 then 3:05 on the spring change.
+  CLOCK_CHANGES = {
+    "fall" => { before: "2026-11-01 05:50:00 UTC", after: "2026-11-01 06:05:00 UTC", now: "2026-11-01 06:10:00 UTC" },
+    "spring" => { before: "2026-03-08 06:50:00 UTC", after: "2026-03-08 07:05:00 UTC", now: "2026-03-08 07:10:00 UTC" }
+  }.freeze
+
+  CLOCK_CHANGES.each do |change, times|
+    define_method("test_prune_keeps_recent_spans_across_the_#{change}_clock_change") do
+      storage = export_before_and_after(times)
+
+      at_new_york_time(times[:now]) { storage.prune(retention_hours: 1, max_spans: 10) }
+
+      assert_equal %w[after before], stored_names
+    end
+
+    define_method("test_prune_keeps_the_newest_span_across_the_#{change}_clock_change") do
+      storage = export_before_and_after(times)
+
+      at_new_york_time(times[:now]) { storage.prune(retention_hours: 24, max_spans: 1) }
+
+      assert_equal %w[after], stored_names
+    end
+
+    define_method("test_requests_list_newest_first_across_the_#{change}_clock_change") do
+      storage = export_before_and_after(times)
+
+      assert_equal %w[after before], storage.list_requests.map { |request| request[:name] }
+    end
+  end
+
+  def test_stores_times_in_utc_whatever_the_local_zone
+    event = mock_span_event(timestamp: Time.utc(2026, 7, 1, 12).to_i * 1_000_000_000)
+    at_new_york_time("2026-07-01 12:00:01 UTC") do
+      @exporter.export([mock_span_data(attributes: { "k" => "v" }, events: [event])])
+    end
+
+    db = SQLite3::Database.new(@db_path)
+    assert_equal ["2026-07-01T12:00:01.000000Z"] * 2, db.get_first_row("SELECT created_at, updated_at FROM flare_spans")
+    assert_equal ["2026-07-01T12:00:00.000000Z", "2026-07-01T12:00:01.000000Z"], db.get_first_row("SELECT created_at, updated_at FROM flare_events")
+    assert_equal ["2026-07-01T12:00:01.000000Z"] * 2, db.get_first_row("SELECT created_at, updated_at FROM flare_properties")
+  ensure
+    db&.close
+  end
+
   private
+
+  def export_before_and_after(times)
+    %i[before after].each do |name|
+      at_new_york_time(times[name]) do
+        @exporter.export([mock_span_data(name: name.to_s, kind: :server, attributes: { "http.method" => "GET" })])
+      end
+    end
+
+    Flare::Storage::SQLite.new(@db_path)
+  end
+
+  def stored_names
+    db = SQLite3::Database.new(@db_path)
+    db.execute("SELECT name FROM flare_spans ORDER BY name").flatten
+  ensure
+    db&.close
+  end
+
+  def at_new_york_time(time)
+    frozen = Time.parse(time)
+    original_zone = ENV["TZ"]
+    ENV["TZ"] = "America/New_York"
+    Time.stub(:now, -> { frozen.getlocal }) { yield }
+  ensure
+    ENV["TZ"] = original_zone
+  end
 
   def mock_span_data(
     name: "test span",

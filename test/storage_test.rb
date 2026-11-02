@@ -170,7 +170,7 @@ class StorageTest < Minitest::Test
   end
 
   def insert_span(path, name, created_at)
-    at = created_at.iso8601(6)
+    at = created_at.getutc.iso8601(6)
     db = SQLite3::Database.new(path)
     db.execute(<<~SQL, [name, at, at])
       INSERT INTO flare_spans (name, kind, span_id, trace_id, start_timestamp, end_timestamp, created_at, updated_at)

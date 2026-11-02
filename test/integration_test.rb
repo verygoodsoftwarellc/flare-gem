@@ -164,7 +164,7 @@ class IntegrationTest < Minitest::Test
 
   def create_request_span(trace_id:, name: "GET /users", method: "GET", status: 200, controller: "UsersController", action: "index")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 100_000_000 # 100ms
 
@@ -205,7 +205,7 @@ class IntegrationTest < Minitest::Test
 
   def create_job_span(trace_id:, name: "MyJob process", job_class: "MyJob", queue: "default")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 50_000_000 # 50ms
 
@@ -231,7 +231,7 @@ class IntegrationTest < Minitest::Test
 
   def create_query_span(trace_id:, parent_span_id:, name: "sql.active_record", statement: "SELECT * FROM users")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 5_000_000 # 5ms
 
@@ -252,7 +252,7 @@ class IntegrationTest < Minitest::Test
 
   def create_exception_span(trace_id:, parent_span_id:, exception_type: "RuntimeError", exception_message: "Something went wrong")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 1_000_000 # 1ms
 

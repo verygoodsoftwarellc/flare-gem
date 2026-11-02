@@ -165,7 +165,7 @@ class CLIRequestTest < Minitest::Test
   end
 
   def insert_exception(db, span_id, type, message, stacktrace)
-    stamp = STARTED.iso8601(6)
+    stamp = STARTED.getutc.iso8601(6)
     db.execute("INSERT INTO flare_events (span_id, name, created_at, updated_at) VALUES (?, 'exception', ?, ?)", [span_id, stamp, stamp])
     insert_properties(db, "Flare::Event", db.last_insert_row_id,
       { "exception.type" => type, "exception.message" => message, "exception.stacktrace" => stacktrace }, stamp)
