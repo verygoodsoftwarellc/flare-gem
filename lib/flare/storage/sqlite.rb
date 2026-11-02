@@ -525,7 +525,7 @@ module Flare
       end
 
       def prune(retention_hours:, max_spans:)
-        cutoff = (Time.now - (retention_hours * 3600)).iso8601(6)
+        cutoff = (Time.now - (retention_hours * 3600)).utc.iso8601(6)
 
         # One transaction: a writer between statements could otherwise shift the
         # newest-N window, leaving spans stripped of their properties or orphaned rows.
