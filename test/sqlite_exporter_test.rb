@@ -358,13 +358,10 @@ class SQLiteExporterTest < Minitest::Test
 
   def at_new_york_time(time)
     frozen = Time.parse(time)
-    original_now = Time.method(:now)
     original_zone = ENV["TZ"]
     ENV["TZ"] = "America/New_York"
-    Time.define_singleton_method(:now) { frozen.getlocal }
-    yield
+    Time.stub(:now, -> { frozen.getlocal }) { yield }
   ensure
-    Time.define_singleton_method(:now, original_now)
     ENV["TZ"] = original_zone
   end
 
