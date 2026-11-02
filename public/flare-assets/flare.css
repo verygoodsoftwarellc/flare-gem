@@ -339,6 +339,15 @@ code, pre {
   border-bottom: 1px solid var(--cb-border);
 }
 
+.sort-link {
+  color: inherit;
+}
+
+.sort-link:hover,
+.sort-link.active {
+  color: var(--cb-text);
+}
+
 .data-table td {
   padding: 0.5rem 0.75rem;
   border-bottom: 1px solid var(--cb-bg-muted);

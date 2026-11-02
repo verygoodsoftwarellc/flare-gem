@@ -27,7 +27,7 @@ module Flare
       end
 
       # List root spans that are HTTP requests (for the requests index)
-      def list_requests(status: nil, method: nil, name: nil, origin: nil, limit: 50, offset: 0)
+      def list_requests(status: nil, method: nil, name: nil, origin: nil, sort: nil, limit: 50, offset: 0)
         # Find root spans with kind=server that have http.method property
         conditions = ["s.parent_span_id = ?", "s.kind = ?"]
         values = [MISSING_PARENT_ID, "server"]
@@ -89,7 +89,7 @@ module Flare
           LEFT JOIN flare_properties action_prop ON action_prop.owner_type = 'Flare::Span' AND action_prop.owner_id = s.id AND action_prop.key = 'code.function'
           #{where_clause}
           AND COALESCE(method_prop.value, method_prop_old.value) IS NOT NULL
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -97,7 +97,7 @@ module Flare
       end
 
       # List root spans that are jobs (for the jobs index)
-      def list_jobs(status: nil, name: nil, limit: 50, offset: 0)
+      def list_jobs(status: nil, name: nil, sort: nil, limit: 50, offset: 0)
         # Find root spans with kind=consumer (ActiveJob processing)
         conditions = ["s.parent_span_id = ?", "s.kind = ?"]
         values = [MISSING_PARENT_ID, "consumer"]
@@ -119,7 +119,7 @@ module Flare
           LEFT JOIN flare_properties job_class_prop ON job_class_prop.owner_type = 'Flare::Span' AND job_class_prop.owner_id = s.id AND job_class_prop.key = 'code.namespace'
           LEFT JOIN flare_properties queue_prop ON queue_prop.owner_type = 'Flare::Span' AND queue_prop.owner_id = s.id AND queue_prop.key = 'messaging.destination'
           #{where_clause}
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -146,13 +146,13 @@ module Flare
       BOOKKEEPING_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
       # List spans by category (for the spans listing pages)
-      def list_spans_by_category(category, name: nil, limit: 50, offset: 0)
+      def list_spans_by_category(category, name: nil, sort: nil, limit: 50, offset: 0)
         patterns = SPAN_CATEGORIES[category] || []
         return [] if patterns.empty? && category != "exceptions"
 
         if category == "exceptions"
           # Exceptions are stored as events on spans, not as spans themselves
-          return list_exception_spans(name: name, limit: limit, offset: offset)
+          return list_exception_spans(name: name, sort: sort, limit: limit, offset: offset)
         end
 
         conditions = ["s.parent_span_id != ?"]
@@ -184,7 +184,7 @@ module Flare
           LEFT JOIN flare_properties root_action ON root_action.owner_type = 'Flare::Span' AND root_action.owner_id = root.id AND root_action.key = 'code.function'
           #{transaction_join}
           #{where_clause}
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -269,7 +269,7 @@ module Flare
       end
 
       # List spans that have exception events
-      def list_exception_spans(name: nil, limit: 50, offset: 0)
+      def list_exception_spans(name: nil, sort: nil, limit: 50, offset: 0)
         conditions = []
         values = []
 
@@ -301,7 +301,7 @@ module Flare
           LEFT JOIN flare_properties exc_message ON exc_message.owner_type = 'Flare::Event' AND exc_message.owner_id = e.id AND exc_message.key = 'exception.message'
           LEFT JOIN flare_properties exc_stacktrace ON exc_stacktrace.owner_type = 'Flare::Event' AND exc_stacktrace.owner_id = e.id AND exc_stacktrace.key = 'exception.stacktrace'
           #{where_clause}
-          ORDER BY e.created_at DESC
+          ORDER BY #{span_order(sort, "e.created_at DESC")}
           LIMIT ? OFFSET ?
         SQL
 
@@ -701,6 +701,11 @@ module Flare
         end
 
         [join, conditions, values]
+      end
+
+      # Ties on duration, like an unsorted list, read newest first.
+      def span_order(sort, newest = "s.created_at DESC")
+        sort == "slowest" ? "(s.end_timestamp - s.start_timestamp) DESC, #{newest}" : newest
       end
 
       # Keyed by path, like SQLiteExporter, so storages for different files on

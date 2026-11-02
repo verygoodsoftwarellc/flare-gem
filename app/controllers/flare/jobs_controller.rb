@@ -14,7 +14,7 @@ module Flare
         name: params[:name].presence
       }
       # Fetch one extra to know if there's a next page
-      jobs = Flare.storage.list_jobs(**filter_params, limit: PER_PAGE + 1, offset: @offset)
+      jobs = Flare.storage.list_jobs(**filter_params, sort: params[:sort], limit: PER_PAGE + 1, offset: @offset)
       @total_count = Flare.storage.count_jobs(**filter_params)
       @has_next = jobs.size > PER_PAGE
       @jobs = jobs.first(PER_PAGE)

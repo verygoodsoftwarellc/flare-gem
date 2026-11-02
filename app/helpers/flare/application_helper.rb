@@ -100,6 +100,25 @@ module Flare
       end
     end
 
+    def sorted_by_slowest?
+      params[:sort] == "slowest"
+    end
+
+    # Links the Duration heading to the slowest first, or back to newest first,
+    # keeping the filters and starting again from the first page.
+    def duration_sort_link
+      query = request.query_parameters.except("offset", "sort")
+      label, css, title = "Duration", "sort-link", "Sort by slowest first"
+
+      if sorted_by_slowest?
+        label, css, title = "Duration \u2193", "sort-link active", "Back to newest first"
+      else
+        query = query.merge("sort" => "slowest")
+      end
+
+      link_to label, [request.path, query.to_query.presence].compact.join("?"), class: css, title: title
+    end
+
     def format_duration(ms)
       return "-" if ms.nil?
 
