@@ -6,15 +6,15 @@ module Flare
     module Project
       private
 
-      # Also matches /.env*, the rule in a new Rails app's .gitignore.
+      # Also matches /.env*, the rule in a new Rails app's .gitignore. The last
+      # rule wins, as it does in git, so a later !.env means it isn't ignored.
       def env_ignored?(gitignore)
-        gitignore.match?(%r{^/?\.env\*?$})
+        last_rule = gitignore.scan(%r{^!?/?\.env\*?$}).last
+        !last_rule.nil? && !last_rule.start_with?("!")
       end
 
       def credentials_exist?
-        %w[config/credentials.yml.enc config/credentials/production.yml.enc].any? do |path|
-          File.exist?(File.join(Dir.pwd, path))
-        end
+        Dir.glob("config/credentials{.yml.enc,/*.yml.enc}", base: Dir.pwd).any?
       end
     end
   end

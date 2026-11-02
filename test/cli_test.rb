@@ -347,6 +347,15 @@ class DoctorCommandTest < Minitest::Test
     assert_includes out, ".gitignore missing: .env"
   end
 
+  def test_warns_when_a_later_rule_stops_ignoring_env
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.env*\n!.env\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore missing: .env"
+  end
+
   # Setup only adds .env when it saved the token there, so it couldn't fix this.
   def test_does_not_ask_for_env_rule_without_an_env_file
     File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
@@ -512,6 +521,15 @@ class StatusCommandTest < Minitest::Test
 
     assert_includes out, "may be in Rails credentials"
     refute_includes out, "not configured"
+  end
+
+  def test_shows_key_may_be_in_environment_credentials
+    FileUtils.mkdir_p(File.join(@dir, "config/credentials"))
+    File.write(File.join(@dir, "config/credentials/development.yml.enc"), "encrypted")
+
+    out, = capture_io { Flare::StatusCommand.new.run }
+
+    assert_includes out, "may be in Rails credentials"
   end
 
   def test_shows_file_statuses
