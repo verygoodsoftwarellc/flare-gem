@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "concurrent/atomic/atomic_fixnum"
 require "concurrent/atomic/atomic_reference"
 
 module Flare
