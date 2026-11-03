@@ -306,6 +306,7 @@
       name: span[:name],
       duration_ms: span[:duration_ms],
       offset_ms: (span[:start_timestamp] - root_start) / 1_000_000.0,
+      bookkeeping: bookkeeping_query?(span),
       properties: span[:properties]
     }
   }.to_json.html_safe %>;
@@ -336,7 +337,10 @@
 
     const method = requestData.http_method || 'GET';
     const status = requestData.http_status || '200';
-    output.push('# ' + method + ' ' + requestData.name + ' [' + status + '] - ' + formatDuration(requestData.duration_ms));
+    // Request names usually start with the method already ("GET /posts").
+    const name = requestData.name || '';
+    const title = name.startsWith(method + ' ') ? name : method + ' ' + name;
+    output.push('# ' + title + ' [' + status + '] - ' + formatDuration(requestData.duration_ms));
     if (requestData.controller && requestData.action) {
       output.push('Controller: ' + requestData.controller + '#' + requestData.action);
     }
@@ -346,10 +350,18 @@
     output.push('');
     output.push('- **Total:** ' + formatDuration(requestData.duration_ms));
 
-    const sqlSpans = spansData.filter(function(s) { return getSpanCategory(s.name) === 'sql'; });
+    // Count and rank the app's queries the way flare requests does, so
+    // schema lookups and BEGIN/COMMIT don't pass for slow app queries.
+    const allSqlSpans = spansData.filter(function(s) { return getSpanCategory(s.name) === 'sql'; });
+    const sqlSpans = allSqlSpans.filter(function(s) { return !s.bookkeeping; });
+    const bookkeepingCount = allSqlSpans.length - sqlSpans.length;
     if (sqlSpans.length > 0) {
       const sqlTotalMs = sqlSpans.reduce(function(sum, s) { return sum + (s.duration_ms || 0); }, 0);
-      output.push('- **SQL:** ' + sqlSpans.length + ' queries, ' + formatDuration(sqlTotalMs) + ' total');
+      let sqlLine = '- **SQL:** ' + sqlSpans.length + ' queries, ' + formatDuration(sqlTotalMs) + ' total';
+      if (bookkeepingCount > 0) {
+        sqlLine += ' (plus ' + bookkeepingCount + ' schema and transaction statements from Active Record)';
+      }
+      output.push(sqlLine);
 
       const slowest = sqlSpans.slice().sort(function(a, b) { return (b.duration_ms || 0) - (a.duration_ms || 0); }).slice(0, 3);
       if (slowest.length > 0 && slowest[0].duration_ms > 1) {

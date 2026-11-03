@@ -428,6 +428,40 @@ class IntegrationTest < Minitest::Test
     assert_includes last_response.body, "GET /users"
   end
 
+  def test_requests_show_marks_active_record_bookkeeping_for_copy_for_ai
+    create_request_span(trace_id: "trace_bookkeeping", name: "GET /posts")
+    parent = "span_trace_bookkeeping"
+
+    named = {
+      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "SELECT * FROM posts") => "Post Load",
+      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "PRAGMA table_xinfo(posts)") => "SCHEMA",
+      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "BEGIN immediate TRANSACTION") => "TRANSACTION",
+    }
+    # Unnamed, but a bare transaction statement.
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "COMMIT")
+
+    db = SQLite3::Database.new(@db_path)
+    now = Time.now.utc.iso8601(6)
+    named.each do |span_id, query_name|
+      db.execute(<<~SQL, ["name", "\"#{query_name}\"", 0, "Flare::Span", span_id, now, now])
+        INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      SQL
+    end
+
+    get "/flare/requests/trace_bookkeeping"
+
+    assert last_response.ok?
+    spans = JSON.parse(last_response.body[/const spansData = (.*?);\n/m, 1])
+    bookkeeping = spans.to_h { |span| [span["properties"]["db.statement"], span["bookkeeping"]] }
+    assert_equal({
+      "SELECT * FROM posts" => false,
+      "PRAGMA table_xinfo(posts)" => true,
+      "BEGIN immediate TRANSACTION" => true,
+      "COMMIT" => true,
+    }, bookkeeping)
+  end
+
   def test_jobs_index_empty
     get "/flare/jobs"
 
