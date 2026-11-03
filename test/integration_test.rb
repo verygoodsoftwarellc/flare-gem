@@ -229,7 +229,7 @@ class IntegrationTest < Minitest::Test
     span_id
   end
 
-  def create_query_span(trace_id:, parent_span_id:, name: "sql.active_record", statement: "SELECT * FROM users")
+  def create_query_span(trace_id:, parent_span_id:, name: "sql.active_record", statement: "SELECT * FROM users", query_name: nil)
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
     now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
@@ -242,10 +242,12 @@ class IntegrationTest < Minitest::Test
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["db.statement", "\"#{statement}\"", 0, "Flare::Span", span_id, now, now])
-      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    SQL
+    { "db.statement" => statement, "name" => query_name }.compact.each do |key, value|
+      db.execute(<<~SQL, [key, "\"#{value}\"", 0, "Flare::Span", span_id, now, now])
+        INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      SQL
+    end
 
     span_id
   end
@@ -431,23 +433,10 @@ class IntegrationTest < Minitest::Test
   def test_requests_show_marks_active_record_bookkeeping_for_copy_for_ai
     create_request_span(trace_id: "trace_bookkeeping", name: "GET /posts")
     parent = "span_trace_bookkeeping"
-
-    named = {
-      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "SELECT * FROM posts") => "Post Load",
-      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "PRAGMA table_xinfo(posts)") => "SCHEMA",
-      create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "BEGIN immediate TRANSACTION") => "TRANSACTION",
-    }
-    # Unnamed, but a bare transaction statement.
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "SELECT * FROM posts", query_name: "Post Load")
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "PRAGMA table_xinfo(posts)", query_name: "SCHEMA")
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "BEGIN immediate TRANSACTION", query_name: "TRANSACTION")
     create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "COMMIT")
-
-    db = SQLite3::Database.new(@db_path)
-    now = Time.now.utc.iso8601(6)
-    named.each do |span_id, query_name|
-      db.execute(<<~SQL, ["name", "\"#{query_name}\"", 0, "Flare::Span", span_id, now, now])
-        INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      SQL
-    end
 
     get "/flare/requests/trace_bookkeeping"
 

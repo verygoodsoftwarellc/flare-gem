@@ -100,12 +100,8 @@ module Flare
       end
     end
 
-    # Active Record's own schema and transaction statements, which the query
-    # counts in the dashboard and CLI leave out.
     def bookkeeping_query?(span)
-      props = span[:properties] || {}
-      Storage::SQLite::BOOKKEEPING_QUERY_NAMES.include?(props["name"]) ||
-        Storage::SQLite::TRANSACTION_STATEMENTS.include?(props["db.statement"].to_s.strip.upcase)
+      Storage::SQLite.bookkeeping_query?(span[:properties] || {})
     end
 
     def sorted_by_slowest?

@@ -1,9 +1,9 @@
 <%
   # Get root span properties
   root_props = @root_span ? @root_span[:properties] : {}
-  http_method = root_props["http.request.method"]
-  http_status = root_props["http.response.status_code"]
-  http_target = root_props["url.path"]
+  http_method = root_props["http.request.method"] || root_props["http.method"]
+  http_status = root_props["http.response.status_code"] || root_props["http.status_code"]
+  http_target = root_props["url.path"] || root_props["http.target"]
   controller = root_props["code.namespace"]
   action = root_props["code.function"]
 
@@ -335,11 +335,9 @@
     output.push('> Given this Rails request trace, how would you improve performance? What information is missing that would help diagnose issues?');
     output.push('');
 
-    const method = requestData.http_method || 'GET';
+    // Titled like flare request: the method and path, else the span name.
+    const title = requestData.http_method ? requestData.http_method + ' ' + (requestData.http_target || requestData.name) : requestData.name;
     const status = requestData.http_status || '200';
-    // Request names usually start with the method already ("GET /posts").
-    const name = requestData.name || '';
-    const title = name.startsWith(method + ' ') ? name : method + ' ' + name;
     output.push('# ' + title + ' [' + status + '] - ' + formatDuration(requestData.duration_ms));
     if (requestData.controller && requestData.action) {
       output.push('Controller: ' + requestData.controller + '#' + requestData.action);
@@ -352,11 +350,10 @@
 
     // Count and rank the app's queries the way flare requests does, so
     // schema lookups and BEGIN/COMMIT don't pass for slow app queries.
-    const allSqlSpans = spansData.filter(function(s) { return getSpanCategory(s.name) === 'sql'; });
-    const sqlSpans = allSqlSpans.filter(function(s) { return !s.bookkeeping; });
-    const bookkeepingCount = allSqlSpans.length - sqlSpans.length;
+    const sqlSpans = spansData.filter(function(s) { return getSpanCategory(s.name) === 'sql' && !s.bookkeeping; });
     if (sqlSpans.length > 0) {
       const sqlTotalMs = sqlSpans.reduce(function(sum, s) { return sum + (s.duration_ms || 0); }, 0);
+      const bookkeepingCount = spansData.filter(function(s) { return s.bookkeeping; }).length;
       let sqlLine = '- **SQL:** ' + sqlSpans.length + ' queries, ' + formatDuration(sqlTotalMs) + ' total';
       if (bookkeepingCount > 0) {
         sqlLine += ' (plus ' + bookkeepingCount + ' schema and transaction statements from Active Record)';
