@@ -335,8 +335,8 @@
     output.push('> Given this Rails request trace, how would you improve performance? What information is missing that would help diagnose issues?');
     output.push('');
 
-    // Titled like flare request: the method and path, else the span name.
-    const title = requestData.http_method ? requestData.http_method + ' ' + (requestData.http_target || requestData.name) : requestData.name;
+    // The method and path, else the span name, which often has the method already.
+    const title = requestData.http_method && requestData.http_target ? requestData.http_method + ' ' + requestData.http_target : requestData.name;
     const status = requestData.http_status || '200';
     output.push('# ' + title + ' [' + status + '] - ' + formatDuration(requestData.duration_ms));
     if (requestData.controller && requestData.action) {
