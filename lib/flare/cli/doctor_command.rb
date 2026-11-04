@@ -101,9 +101,7 @@ module Flare
     end
 
     def key_configured?
-      return true if ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?
-
-      key_in_dotenv?
+      (ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?) || key_in_dotenv?
     end
 
     def spans_expected?

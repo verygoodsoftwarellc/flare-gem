@@ -359,7 +359,7 @@ class DoctorCommandTest < Minitest::Test
     refute_includes out, ".gitignore missing"
   end
 
-  def test_warns_when_env_exists_and_is_not_ignored
+  def test_warns_when_env_holds_the_key_and_is_not_ignored
     File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
     File.write(File.join(@dir, ".gitignore"), "/.environment\nflare.sqlite3*\n")
 
