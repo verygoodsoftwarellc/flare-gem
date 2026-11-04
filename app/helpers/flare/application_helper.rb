@@ -100,6 +100,10 @@ module Flare
       end
     end
 
+    def bookkeeping_query?(span)
+      Storage::SQLite.bookkeeping_query?(span[:properties] || {})
+    end
+
     def sorted_by_slowest?
       params[:sort] == "slowest"
     end

@@ -145,6 +145,12 @@ module Flare
       # savepoints, PRAGMA, SHOW and SET).
       BOOKKEEPING_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
 
+      # The queries filter's rule in Ruby, for one span's properties.
+      def self.bookkeeping_query?(properties)
+        BOOKKEEPING_QUERY_NAMES.include?(properties["name"]) ||
+          TRANSACTION_STATEMENTS.include?(properties["db.statement"].to_s.strip.upcase)
+      end
+
       # List spans by category (for the spans listing pages)
       def list_spans_by_category(category, name: nil, sort: nil, limit: 50, offset: 0)
         patterns = SPAN_CATEGORIES[category] || []
