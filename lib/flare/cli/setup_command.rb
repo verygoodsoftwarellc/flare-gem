@@ -115,9 +115,7 @@ module Flare
     # --- Auth ---
 
     def authenticate
-      env_path = File.join(Dir.pwd, ".env")
-
-      if !@force && File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+      if !@force && key_in_dotenv?
         puts "#{checkmark} FLARE_KEY already set in .env, skipping auth."
         puts "  Run with --force to re-authenticate."
         return
@@ -379,7 +377,7 @@ module Flare
       contents = File.read(gitignore_path)
       entries_to_add = []
 
-      entries_to_add << ".env" if @saved_to_dotenv && !env_ignored?(contents)
+      entries_to_add << ".env" if (@saved_to_dotenv || key_in_dotenv?) && !env_ignored?(contents)
       entries_to_add << "flare.sqlite3*" unless contents.include?("flare.sqlite3*")
 
       return if entries_to_add.empty?

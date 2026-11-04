@@ -64,7 +64,7 @@ module Flare
 
       contents = File.read(gitignore_path)
       missing = []
-      missing << ".env" if File.exist?(File.join(Dir.pwd, ".env")) && !env_ignored?(contents)
+      missing << ".env" if key_in_dotenv? && !env_ignored?(contents)
       missing << "flare.sqlite3*" unless contents.include?("flare.sqlite3")
 
       if missing.empty?
@@ -103,8 +103,7 @@ module Flare
     def key_configured?
       return true if ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?
 
-      env_path = File.join(Dir.pwd, ".env")
-      File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+      key_in_dotenv?
     end
 
     def spans_expected?

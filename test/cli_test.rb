@@ -190,6 +190,27 @@ class SetupCommandGitignoreTest < Minitest::Test
     assert_equal "/.env*\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
   end
 
+  # Setup skips auth when FLARE_KEY is already in .env, but that .env holds
+  # the key all the same.
+  def test_adds_env_when_the_key_is_already_in_it
+    File.write(File.join(@dir, ".gitignore"), "/tmp\n")
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=existing_key\n")
+
+    out, = capture_io { Flare::SetupCommand.new.send(:add_gitignore_entries) }
+
+    assert_equal "/tmp\n.env\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+    assert_includes out, "Added .env, flare.sqlite3*"
+  end
+
+  def test_leaves_env_alone_when_the_key_is_not_in_it
+    File.write(File.join(@dir, ".gitignore"), "/tmp\n")
+    File.write(File.join(@dir, ".env"), "OTHER_VAR=hello\nFLARE_KEY=\n")
+
+    capture_io { Flare::SetupCommand.new.send(:add_gitignore_entries) }
+
+    assert_equal "/tmp\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+  end
+
   def test_does_nothing_without_gitignore
     cmd = Flare::SetupCommand.new(force: false)
     out, = capture_io { cmd.send(:add_gitignore_entries) }
@@ -356,13 +377,37 @@ class DoctorCommandTest < Minitest::Test
     assert_includes out, ".gitignore missing: .env"
   end
 
-  # Setup only adds .env when it saved the token there, so it couldn't fix this.
+  # Setup only adds .env when the key is in it, so it couldn't fix these.
   def test_does_not_ask_for_env_rule_without_an_env_file
     File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
 
     out, = capture_io { Flare::DoctorCommand.new.run }
 
     assert_includes out, ".gitignore entries present"
+  end
+
+  def test_does_not_ask_for_env_rule_when_the_key_is_not_in_env
+    File.write(File.join(@dir, ".env"), "OTHER_VAR=hello\n")
+    File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
+  end
+
+  # The key was put in .env by hand, so setup skips auth. Doctor should agree
+  # afterwards instead of sending people back to setup.
+  def test_passes_after_setup_with_the_key_already_in_env
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/log\n")
+    FileUtils.mkdir_p(File.join(@dir, "db"))
+
+    setup_out, = capture_io { Flare::SetupCommand.new.run }
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes setup_out, "skipping auth"
+    assert_includes out, ".gitignore entries present"
+    assert_includes out, "Everything looks good!"
   end
 
   def test_missing_initializer
