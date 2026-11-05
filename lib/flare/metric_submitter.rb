@@ -24,6 +24,14 @@ module Flare
     # Max retries before giving up
     MAX_RETRIES = 3
 
+    # Network errors worth another try. A DNS failure or an unreachable host
+    # fails before anything is sent, like a refused connection.
+    RETRIABLE_ERRORS = [
+      Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout,
+      Errno::ECONNREFUSED, Errno::ECONNRESET,
+      SocketError, Errno::EHOSTUNREACH, Errno::ENETUNREACH
+    ].freeze
+
     class SubmissionError < StandardError
       attr_reader :request_id, :response_code, :response_body
 
@@ -179,7 +187,7 @@ module Flare
           result, should_retry = yield
           return [nil, DeadlineExceeded.new("metric submission deadline exceeded")] if deadline.expired?
           return [result, nil] unless should_retry
-        rescue SubmissionError, Net::OpenTimeout, Net::ReadTimeout, Net::WriteTimeout, Errno::ECONNREFUSED, Errno::ECONNRESET => e
+        rescue SubmissionError, *RETRIABLE_ERRORS => e
           last_error = e
           attempts_remaining -= 1
 

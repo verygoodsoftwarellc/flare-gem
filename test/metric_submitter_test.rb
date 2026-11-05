@@ -40,7 +40,33 @@ class MetricSubmitterTest < Minitest::Test
     assert_instance_of Flare::MetricSubmitter::DeadlineExceeded, error
   end
 
+  def test_retries_when_the_host_cannot_be_resolved_or_reached
+    [SocketError, Errno::EHOSTUNREACH, Errno::ENETUNREACH].each do |error_class|
+      submitter = TestSubmitter.new(backoff_policy: quick_backoff, errors: [error_class.new("first attempt")])
+
+      count, error = submitter.submit(metrics)
+
+      assert_nil error, error_class.name
+      assert_equal 1, count, error_class.name
+      assert_equal 2, submitter.timeouts.length, error_class.name
+    end
+  end
+
+  def test_unexpected_errors_are_not_retried
+    submitter = TestSubmitter.new(backoff_policy: quick_backoff, errors: [ArgumentError.new("bug")])
+
+    count, error = submitter.submit(metrics)
+
+    assert_equal 0, count
+    assert_instance_of ArgumentError, error
+    assert_equal 1, submitter.timeouts.length
+  end
+
   private
+
+  def quick_backoff
+    Flare::BackoffPolicy.new(min_timeout_ms: 1, max_timeout_ms: 1)
+  end
 
   def metrics
     key = Flare::MetricKey.new(
@@ -62,7 +88,7 @@ class MetricSubmitterTest < Minitest::Test
   class TestSubmitter < Flare::MetricSubmitter
     attr_reader :timeouts
 
-    def initialize(backoff_policy: nil, error: nil, delay: 0)
+    def initialize(backoff_policy: nil, error: nil, errors: [], delay: 0)
       super(
         endpoint: "https://flare.example",
         api_key: "key",
@@ -71,6 +97,7 @@ class MetricSubmitterTest < Minitest::Test
         backoff_policy: backoff_policy
       )
       @error = error
+      @errors = errors.dup
       @delay = delay
       @timeouts = []
     end
@@ -81,6 +108,7 @@ class MetricSubmitterTest < Minitest::Test
       @timeouts << timeout
       sleep @delay
       raise @error if @error
+      raise @errors.shift unless @errors.empty?
 
       [Response.new("202"), false]
     end
