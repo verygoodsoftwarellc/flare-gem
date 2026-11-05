@@ -24,8 +24,8 @@ class HttpTransportTest < Minitest::Test
 
   def teardown
     @server.close
-    @accept_thread.join(1)
-    @clients.size.times { @clients.pop.close }
+    @clients.pop.close until @clients.empty?
+    @accept_thread.kill.join
   end
 
   def test_get_sends_one_request_when_the_server_does_not_answer
@@ -59,10 +59,10 @@ class HttpTransportTest < Minitest::Test
   # A resend would arrive right after the first read timeout. Counts only
   # our own requests, since other local processes sometimes probe open ports.
   def requests_after_settling(prefix)
-    sleep 0.1
-    lines = []
-    lines << @request_lines.pop until @request_lines.empty?
-    lines.count { |line| line.to_s.start_with?(prefix) }
+    sleep 0.05
+    count = 0
+    count += 1 if @request_lines.pop.to_s.start_with?(prefix) until @request_lines.empty?
+    count
   end
 
   def monotonic_now
