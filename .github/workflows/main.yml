@@ -28,6 +28,7 @@ jobs:
           - "7.2"
           - "8.0"
           - "8.1"
+        # Rails 7.2 needs Ruby 3.1+, and Rails 8.x needs Ruby 3.2+.
         exclude:
           - ruby: "3.0"
             rails: "7.2"
@@ -35,7 +36,6 @@ jobs:
             rails: "8.0"
           - ruby: "3.1"
             rails: "8.0"
-          # Rails 8.1 needs Ruby 3.2 or newer.
           - ruby: "3.0"
             rails: "8.1"
           - ruby: "3.1"
