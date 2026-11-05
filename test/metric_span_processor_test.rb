@@ -11,6 +11,82 @@ class MetricSpanProcessorTest < Minitest::Test
     @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
   end
 
+  def test_sql_metric_names_ignore_words_inside_values_and_comments
+    {
+      "SELECT 'x from hunter2' AS a FROM posts" => ["posts", "SELECT"],
+      "UPDATE posts SET title = 'y into hunter2' WHERE id = 1" => ["posts", "UPDATE"],
+      "/* hunter2 */ SELECT 1 FROM posts" => ["posts", "SELECT"],
+      "SELECT 'unterminated from hunter2" => ["primary", "SELECT"],
+    }.each do |statement, (target, operation)|
+      @processor.on_end(MockSpan.new(
+        kind: :internal,
+        parent_span_id: "abc",
+        attributes: { "db.system" => "sqlite", "db.name" => "primary", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+
+      key = @storage.drain.keys.first
+      assert_equal [target, operation], [key.target, key.operation], statement
+    end
+  end
+
+  def test_non_sql_systems_get_no_names_from_the_statement
+    {
+      { "db.system" => "clickhouse", "db.statement" => "SELECT 'x from hunter2' FROM events" } => ["events", "SELECT"],
+      { "db.system" => "cassandra", "db.statement" => "SELECT * FROM events WHERE a = 'x'" } => ["events", "SELECT"],
+      { "db.system" => "snowflake", "db.statement" => %(SELECT 1 FROM "hunter2") } => ["unknown", "SELECT"],
+      { "db.system" => "mongodb", "db.operation" => "find", "db.mongodb.collection" => "users", "db.statement" => %({"filter":{"a":"?"}}) } => ["users", "FIND"],
+      { "db.system" => "mongodb", "db.statement" => %({"find":"hunter2"}) } => ["unknown", "query"],
+      { "db.system" => "couchbase", "db.statement" => %({"a":"hunter2"}) } => ["unknown", "query"],
+      { "db.system" => "mystery", "db.statement" => "hunter2 x" } => ["unknown", "query"],
+      { "db.system" => "etcd", "db.statement" => "PUT x", "db.operation" => "hunter2 x" } => ["unknown", "PUT"],
+      { "db.system" => "etcd", "db.operation" => "get" } => ["unknown", "GET"],
+      { "db.system" => "etcd", "db.operation" => "secret word" } => ["unknown", "query"],
+      { "db.system" => "etcd", "db.name" => "main", "db.statement" => "GET x" } => ["main", "GET"],
+    }.each do |attributes, expected|
+      @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: attributes, start_ns: 0, end_ns: 1_000_000))
+
+      key = @storage.drain.keys.first
+      assert_equal expected, [key.target, key.operation], attributes.inspect
+    end
+  end
+
+  def test_sqlite_metric_names_survive_double_quoted_names_and_ignore_double_quoted_values
+    {
+      'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ?' => "posts",
+      'INSERT INTO "posts" ("a") VALUES (?)' => "posts",
+      'UPDATE "posts" SET "a" = ?' => "posts",
+      'SELECT "x from hunter2" AS a FROM posts' => "posts",
+    }.each do |statement, target|
+      @processor.on_end(MockSpan.new(kind: :internal, parent_span_id: "abc", attributes: { "db.system" => "sqlite", "db.statement" => statement }, start_ns: 0, end_ns: 1_000_000))
+
+      assert_equal target, @storage.drain.keys.first.target, statement
+    end
+  end
+
+  def test_http_metric_paths_drop_segments_with_userinfo
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.request.method" => "GET", "http.host" => "api.example.com", "http.target" => "/a/u:hunter2@b/@bob", "http.status_code" => 200 }, start_ns: 0, end_ns: 1_000_000))
+
+    assert_equal "GET /a/:token/@bob", @storage.drain.keys.first.target
+  end
+
+  def test_http_metric_drops_userinfo_and_fragment
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(
+      kind: :client,
+      parent_span_id: "abc",
+      attributes: { "http.request.method" => "GET", "http.host" => "user:hunter2@api.example.com", "http.target" => "/items#hunter2", "http.status_code" => 200 },
+      start_ns: 0,
+      end_ns: 1_000_000
+    ))
+
+    key = @storage.drain.keys.first
+    assert_equal "api.example.com", key.service
+    assert_equal "GET /items", key.target
+  end
+
   def test_web_request_creates_metric
     span = MockSpan.new(
       kind: :server,
@@ -208,6 +284,24 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "postgresql", key.service
     assert_equal "users", key.target
     assert_equal "SELECT", key.operation
+  end
+
+  def test_long_statements_name_the_metric_from_their_start_only
+    insert = "INSERT INTO cards (number) VALUES ('#{"sk_cut_secret" * 1_000}')"
+    late_from = "SELECT #{"a, " * 2_000}b FROM late_table"
+
+    [[insert, "cards", "INSERT"], [late_from, "app_db", "SELECT"]].each do |statement, target, operation|
+      @processor.on_finish(MockSpan.new(
+        kind: :client,
+        parent_span_id: "abc123",
+        attributes: { "db.system" => "postgresql", "db.name" => "app_db", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+      key = @storage.drain.keys.first
+      assert_equal target, key.target
+      assert_equal operation, key.operation
+    end
   end
 
   def test_redis_span_creates_metric
