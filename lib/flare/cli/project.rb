@@ -13,6 +13,13 @@ module Flare
         !last_rule.nil? && !last_rule.start_with?("!")
       end
 
+      # A FLARE_KEY in .env, whether setup saved it there or someone added it
+      # by hand. Setup and doctor both treat that .env as needing to be ignored.
+      def key_in_dotenv?
+        env_path = File.join(Dir.pwd, ".env")
+        File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+      end
+
       def credentials_exist?
         Dir.glob("config/credentials{.yml.enc,/*.yml.enc}", base: Dir.pwd).any?
       end

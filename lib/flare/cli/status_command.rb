@@ -32,8 +32,7 @@ module Flare
       if ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?
         green("set via ENV")
       else
-        env_path = File.join(Dir.pwd, ".env")
-        if File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+        if key_in_dotenv?
           green("set in .env")
         elsif credentials_exist?
           dim("not in ENV or .env (may be in Rails credentials)")
