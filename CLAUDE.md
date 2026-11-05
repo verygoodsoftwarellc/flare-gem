@@ -122,6 +122,8 @@ Users instrument their code with `ActiveSupport::Notifications.instrument("app.w
 
 `--force` flag on setup re-runs auth even if `FLARE_KEY` exists in `.env`.
 
+`requests`, `request` and `nplus1` read the local spans database read-only and take `--json` and `--db PATH`; `requests` and `nplus1` also take `--last N` (default 10).
+
 ## Development
 
 ```
@@ -147,6 +149,8 @@ Tests use Minitest. The test helper loads core library classes directly without 
 - `lib/flare/configuration.rb` - all config options and environment defaults
 - `lib/flare/cli.rb` - CLI command router
 - `lib/flare/cli/setup_command.rb` - setup/auth flow
+- `lib/flare/cli/doctor_command.rb`, `status_command.rb` - setup checks and current configuration
+- `lib/flare/cli/requests_command.rb`, `request_command.rb`, `nplus1_command.rb` - read local spans from the terminal (shared options in `local_spans.rb`)
 - `lib/flare/sqlite_exporter.rb` - OTel span exporter that writes to SQLite
 - `lib/flare/http_metrics_config.rb` - per-host HTTP path allow/map DSL for metrics cardinality control
 - `lib/flare/metric_span_processor.rb` - OTel span processor that extracts metrics

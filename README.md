@@ -98,19 +98,19 @@ All three commands take `--json` for machine-readable output and `--db PATH` if 
 
 ### Coding agents
 
-Coding agents like Claude Code, Codex and Cursor can run these commands themselves, and they will if your app's `AGENTS.md` or `CLAUDE.md` tells them to. For example:
+Add something like this to your app's `AGENTS.md` or `CLAUDE.md` so coding agents (Claude Code, Codex, Cursor) use these commands:
 
 ```markdown
 ## Checking performance
 
-Flare records every request in development. After changing a controller, view or query, make the request, then run:
+Flare records every request in development. After changing a controller, view or query, make the request, then:
 
-- `bundle exec flare requests --json` for each recent request's duration, query count and trace_id
-- `bundle exec flare request <trace_id> --json` for every query in that request and the line of code that ran it
-- `bundle exec flare nplus1 --json` for queries repeated within a request
+- `bundle exec flare requests --last 1 --json` shows its duration, query count and trace_id
+- `bundle exec flare nplus1 --last 1 --json` shows any query it ran more than once, with the code that ran it
+- `bundle exec flare request <trace_id> --json` shows every query in order, when you need the full timeline
 ```
 
-They read the local spans database, so they work without a Flare account or network access.
+No Flare account or network access needed.
 
 ## Configuration
 
