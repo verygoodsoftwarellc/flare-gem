@@ -19,7 +19,7 @@ class MetricSubmitterTest < Minitest::Test
 
   def test_retry_backoff_returns_deadline_error_without_sleeping_past_budget
     backoff = Flare::BackoffPolicy.new(min_timeout_ms: 1_000, max_timeout_ms: 1_000)
-    submitter = TestSubmitter.new(backoff_policy: backoff, error: retriable_error)
+    submitter = TestSubmitter.new(backoff_policy: backoff, errors: [retriable_error])
     started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
     count, error = submitter.submit(metrics, timeout: 0.02)
@@ -88,7 +88,7 @@ class MetricSubmitterTest < Minitest::Test
   class TestSubmitter < Flare::MetricSubmitter
     attr_reader :timeouts
 
-    def initialize(backoff_policy: nil, error: nil, errors: [], delay: 0)
+    def initialize(backoff_policy: nil, errors: [], delay: 0)
       super(
         endpoint: "https://flare.example",
         api_key: "key",
@@ -96,7 +96,6 @@ class MetricSubmitterTest < Minitest::Test
         environment: "test",
         backoff_policy: backoff_policy
       )
-      @error = error
       @errors = errors.dup
       @delay = delay
       @timeouts = []
@@ -107,7 +106,6 @@ class MetricSubmitterTest < Minitest::Test
     def post(_body, _request_id, timeout: nil)
       @timeouts << timeout
       sleep @delay
-      raise @error if @error
       raise @errors.shift unless @errors.empty?
 
       [Response.new("202"), false]
