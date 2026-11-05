@@ -31,4 +31,4 @@ Then visit:
 | `/error` | Raises an exception (for testing error tracking) |
 | `/flare` | Flare dashboard |
 
-Click around, then check the Flare dashboard to see the recorded cases and clues.
+Click around, then check the Flare dashboard to see the recorded requests, queries and errors.

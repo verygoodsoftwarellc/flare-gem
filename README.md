@@ -96,6 +96,22 @@ GET /posts  200  48.2ms  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
 
 All three commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
 
+### Coding agents
+
+Coding agents like Claude Code, Codex and Cursor can run these commands themselves, and they will if your app's `AGENTS.md` or `CLAUDE.md` tells them to. For example:
+
+```markdown
+## Checking performance
+
+Flare records every request in development. After changing a controller, view or query, make the request, then run:
+
+- `bundle exec flare requests --json` for each recent request's duration, query count and trace_id
+- `bundle exec flare request <trace_id> --json` for every query in that request and the line of code that ran it
+- `bundle exec flare nplus1 --json` for queries repeated within a request
+```
+
+They read the local spans database, so they work without a Flare account or network access.
+
 ## Configuration
 
 All configuration is optional. Flare works out of the box with sensible defaults.
