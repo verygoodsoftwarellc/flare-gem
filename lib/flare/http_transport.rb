@@ -55,6 +55,10 @@ module Flare
       http.open_timeout = effective_timeout(@open_timeout, deadline.remaining)
       http.read_timeout = effective_timeout(@read_timeout, deadline.remaining)
       http.write_timeout = effective_timeout(@write_timeout, deadline.remaining) if http.respond_to?(:write_timeout=)
+      # Net::HTTP silently resends a GET or PUT once after a read timeout,
+      # with no backoff and a fresh timeout, so a slow server took twice the
+      # caller's budget. Callers decide when to try again.
+      http.max_retries = 0
 
       req = klass.new(uri.request_uri == "" ? "/" : uri.request_uri)
       headers.each { |k, v| req[k] = v }
