@@ -96,6 +96,22 @@ GET /posts  200  48.2ms  PostsController#index  4bf92f3577b34da6a3ce929d0e0e4736
 
 All three commands take `--json` for machine-readable output and `--db PATH` if you changed `database_path`.
 
+### Coding agents
+
+Add something like this to your app's `AGENTS.md` or `CLAUDE.md` so coding agents (Claude Code, Codex, Cursor) use these commands:
+
+```markdown
+## Checking performance
+
+Flare records every request in development. After changing a controller, view or query, make the request, then:
+
+- `bundle exec flare requests --last 1 --json` shows its duration, query count and trace_id
+- `bundle exec flare nplus1 --last 1 --json` shows any query it ran more than once, with the code that ran it
+- `bundle exec flare request <trace_id> --json` shows every query in order, when you need the full timeline
+```
+
+No Flare account or network access needed.
+
 ## Configuration
 
 All configuration is optional. Flare works out of the box with sensible defaults.
