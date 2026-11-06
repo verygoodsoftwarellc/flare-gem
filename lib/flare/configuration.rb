@@ -28,6 +28,11 @@ module Flare
     attr_accessor :metrics_timeout     # HTTP timeout in seconds (default: 5)
     attr_accessor :metrics_gzip        # Whether to gzip payloads (default: true)
 
+    # Where metrics, trace rules and trace notifications go. Flare's ingest
+    # service (a Cloudflare Worker) serves /api/metrics and /api/traces and
+    # passes everything else through to the app at flare.am.
+    DEFAULT_URL = "https://ingest.flare.am"
+
     # Default patterns to auto-subscribe to for custom instrumentation
     # Use "app." prefix in your ActiveSupport::Notifications.instrument calls
     DEFAULT_SUBSCRIBE_PATTERNS = %w[app.].freeze
@@ -64,7 +69,7 @@ module Flare
       @tracing_max_queue = 5_000
 
       # Metrics HTTP submission defaults
-      @url = ENV.fetch("FLARE_URL", credentials_url || "https://flare.am")
+      @url = ENV.fetch("FLARE_URL", credentials_url || DEFAULT_URL)
       @key = ENV["FLARE_KEY"]
       @metrics_timeout = 5
       @metrics_gzip = true
