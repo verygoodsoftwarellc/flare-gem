@@ -160,7 +160,13 @@ module Flare
       end
       SUCCESS
     ensure
-      @mutex.synchronize { @queue.unshift(*snapshot) } if snapshot&.any?
+      if snapshot&.any?
+        @mutex.synchronize do
+          @queue.unshift(*snapshot)
+          overflow = @queue.length - @max_queue_size
+          @queue.shift(overflow) if overflow.positive?
+        end
+      end
     end
 
     def start_flush_export(snapshot, deadline)
