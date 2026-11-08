@@ -22,9 +22,12 @@ class StorageForkTest < Minitest::Test
         rescue StandardError => error
           result = { error: "#{error.class}: #{error.message}" }
         end
-        writer.write(Marshal.dump(result))
-        writer.close
-        exit! 0
+        begin
+          writer.write(Marshal.dump(result))
+        ensure
+          writer.close
+          exit! 0
+        end
       end
       writer.close
       result, child_status = Timeout.timeout(5) do
@@ -46,7 +49,11 @@ class StorageForkTest < Minitest::Test
         rescue Errno::ESRCH
           nil
         ensure
-          Process.wait(pid) rescue Errno::ECHILD
+          begin
+            Process.wait(pid)
+          rescue Errno::ECHILD
+            nil
+          end
         end
       end
       reader&.close
