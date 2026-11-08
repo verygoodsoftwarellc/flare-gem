@@ -276,8 +276,8 @@ module Flare
 
       # List spans that have exception events
       def list_exception_spans(name: nil, sort: nil, limit: 50, offset: 0)
-        conditions = []
-        values = []
+        conditions = ["e.name = ?"]
+        values = ["exception"]
 
         if name
           conditions << "e.name LIKE ?"
@@ -315,8 +315,8 @@ module Flare
       end
 
       def count_exception_spans(name: nil)
-        conditions = []
-        values = []
+        conditions = ["e.name = ?"]
+        values = ["exception"]
 
         if name
           conditions << "e.name LIKE ?"
