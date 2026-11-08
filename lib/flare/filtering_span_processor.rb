@@ -145,6 +145,8 @@ module Flare
 
     def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do
+        return if @stopped
+
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
         @pending_by_trace[trace_id] ||= []
