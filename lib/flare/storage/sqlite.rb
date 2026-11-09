@@ -715,9 +715,10 @@ module Flare
       end
 
       # Keyed by path, like SQLiteExporter, so storages for different files on
-      # the same thread don't share a connection.
+      # the same thread don't share a connection. A child must not use its
+      # parent's handle or close it while the parent may still be using it.
       def connection_key
-        :"flare_storage_db_#{@database_path.hash}"
+        :"flare_storage_db_#{$$}_#{@database_path.hash}"
       end
 
       def connection
