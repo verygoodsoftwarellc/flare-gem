@@ -30,6 +30,15 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 1, @processor.exception_count.value
   end
 
+  def test_finished_spans_after_shutdown_are_ignored
+    @processor.shutdown(timeout: 1)
+    @processor.on_finish(span(trace_id: "late", span_id: "late", sampled: true, parent_span_id: nil))
+    @processor.force_flush(timeout: 1)
+
+    assert_equal 0, @processor.buffer_size
+    assert_empty @exporter.exports.flatten
+  end
+
   def test_enqueues_sampled_spans
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: true, parent_span_id: nil))
     @processor.force_flush

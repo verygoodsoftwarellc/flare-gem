@@ -19,6 +19,14 @@ class RecordingBatchSpanProcessorTest < Minitest::Test
     @processor.shutdown(timeout: 1)
   end
 
+  def test_finished_spans_after_shutdown_are_ignored
+    assert_equal SUCCESS, @processor.shutdown(timeout: 1)
+    @processor.on_finish(MockSpan.new(SpanData.new("too-late", false)))
+    @processor.force_flush(timeout: 1)
+
+    assert_empty @exporter.exports.flatten
+  end
+
   def test_exports_record_only_spans_without_changing_span_data
     span_data = SpanData.new("trace", false)
     @processor.on_finish(MockSpan.new(span_data))

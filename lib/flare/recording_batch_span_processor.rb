@@ -35,6 +35,8 @@ module Flare
       detect_forking
 
       @mutex.synchronize do
+        return if @stopped
+
         overflow = @queue.length + 1 - @max_queue_size
         @queue.shift(overflow) if overflow.positive?
         @queue << span
