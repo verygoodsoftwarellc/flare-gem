@@ -71,6 +71,10 @@ module Flare
       return false unless line.include?("/app/")
       return false if line.start_with?(GEM_ROOT)
 
+      if defined?(Rails) && Rails.respond_to?(:root) && Rails.root
+        return true if line.start_with?("#{Rails.root}/app/")
+      end
+
       IGNORE_PATTERNS.none? { |pattern| line.match?(pattern) }
     end
 
