@@ -42,7 +42,7 @@ module Flare
 
     def self.resolve(configured: configured_revision, env: ENV, root: app_root)
       candidates = [configured, env["FLARE_REVISION"]]
-      candidates.concat(PLATFORM_VARIABLES.map { |name| env[name] })
+      candidates.concat(PLATFORM_VARIABLES.map { |name| platform_value(name, env[name]) })
 
       revision = candidates.map { |value| clean(value) }.find { |value| value }
       revision ||= clean(revision_file(root))
@@ -56,6 +56,15 @@ module Flare
         @resolved = false
         @current = nil
       end
+    end
+
+    # Fly's FLY_IMAGE_REF is the whole image reference
+    # ("registry.fly.io/app:deployment-01J...@sha256:..."). Its tag is the part
+    # that names the deploy, and the git SHA when deployed with --image-label.
+    def self.platform_value(name, value)
+      return value unless name == "FLY_IMAGE_REF" && value
+
+      value.split("@", 2).first.split("/").last.split(":", 2)[1]
     end
 
     def self.clean(value)

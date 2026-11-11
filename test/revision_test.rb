@@ -32,6 +32,15 @@ class RevisionTest < Minitest::Test
     assert_equal "render", resolve(env: env)
   end
 
+  def test_fly_image_ref_uses_the_image_tag
+    assert_equal SHA, resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app:#{SHA}" })
+    assert_equal "deployment-01JABC", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app:deployment-01JABC@sha256:#{"f" * 64}" })
+  end
+
+  def test_fly_image_ref_without_a_tag_falls_through
+    assert_equal "git", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app", "GIT_SHA" => "git" })
+  end
+
   def test_blank_values_are_skipped
     assert_equal SHA, resolve(configured: "  ", env: { "FLARE_REVISION" => "", "GIT_SHA" => " #{SHA}\n" })
   end
