@@ -1243,6 +1243,17 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal 1, @storage.drain.values.first[:error_count]
   end
 
+  # Regression: ISSUE-001 — a retried exception is recorded on the child
+  # enqueue_retry span, so the job's process span only has the status.
+  # Found by /qa on 2026-11-11
+  def test_ignores_retried_exception_named_only_in_the_job_status
+    span = failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError")
+    span.events.clear
+    @processor.on_end(span)
+
+    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, @storage.drain.values.first)
+  end
+
   def test_custom_ignore_errors_match_the_class_and_its_subclasses
     processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS + [RetryLaterError.name])
 
