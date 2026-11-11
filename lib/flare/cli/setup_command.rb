@@ -49,10 +49,7 @@ module Flare
         #   request.path.start_with?("/health")
         # }
 
-        # Exceptions that don't count as errors in metrics, by class name.
-        # Subclasses match too, and the span still counts as a success. The
-        # default list holds GoodJob's ConcurrencyExceededError, which jobs
-        # raise to wait for a concurrency or throttle limit.
+        # Exceptions (and subclasses) that don't count as errors in metrics.
         # config.ignore_errors << "MyApp::RetryLaterError"
 
         # ── Metrics (remote monitoring) ────────────────────────────────────

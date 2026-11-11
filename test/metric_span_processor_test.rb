@@ -9,7 +9,7 @@ unless defined?(GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededEr
     module ActiveJobExtensions
       module Concurrency
         class ConcurrencyExceededError < StandardError; end
-        ThrottleExceededError = Class.new(ConcurrencyExceededError)
+        class ThrottleExceededError < ConcurrencyExceededError; end
       end
     end
   end
@@ -22,7 +22,7 @@ class MetricSpanProcessorTest < Minitest::Test
   def setup
     @storage = Flare::MetricStorage.new
     @http_config = Flare::HttpMetricsConfig.new
-    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS)
   end
 
   def test_sql_metric_names_ignore_words_inside_values_and_comments
@@ -1224,16 +1224,11 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET *", key.target
   end
 
-  def test_default_ignores_good_job_concurrency_exceeded_error
+  def test_default_ignores_good_job_concurrency_errors_and_subclasses
     @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
-
-    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, @storage.drain.values.first)
-  end
-
-  def test_default_ignores_good_job_throttle_exceeded_error_subclass
     @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
 
-    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, @storage.drain.values.first)
+    assert_equal({ count: 2, sum_ms: 100, error_count: 0 }, @storage.drain.values.first)
   end
 
   def test_exception_not_ignored_still_counts_as_error
@@ -1249,9 +1244,7 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_custom_ignore_errors_match_the_class_and_its_subclasses
-    config = Flare::Configuration.new
-    config.ignore_errors << RetryLaterError.name
-    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: config.ignore_errors)
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS + [RetryLaterError.name])
 
     processor.on_end(failed_job_span(RetryLaterError.name))
     processor.on_end(failed_job_span(RetrySoonerError.name))
@@ -1262,7 +1255,7 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def test_ignore_errors_match_unloadable_classes_by_exact_name
-    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: ["::Missing::RetryError"])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: ["Missing::RetryError"])
 
     processor.on_end(failed_job_span("Missing::RetryError"))
     processor.on_end(failed_job_span("Missing::RetryErrorSubclass"))
