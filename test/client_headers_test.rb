@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "flare"
 require "flare/client_headers"
 require "minitest/mock"
 
@@ -24,15 +25,19 @@ class ClientHeadersTest < Minitest::Test
   end
 
   def test_includes_revision_when_one_resolves
-    Flare::Revision.stub(:current, "abc123") do
-      assert_equal "abc123", Flare::ClientHeaders.to_h["X-Client-Revision"]
-    end
+    Flare.configuration.revision = "abc123"
+    assert_equal "abc123", Flare::ClientHeaders.to_h["X-Client-Revision"]
+  ensure
+    Flare.reset!
   end
 
   def test_omits_revision_when_none_resolves
-    Flare::Revision.stub(:current, nil) do
+    Flare.configuration.revision = nil
+    Flare::Revision.stub(:resolve, nil) do
       refute Flare::ClientHeaders.to_h.key?("X-Client-Revision")
     end
+  ensure
+    Flare.reset!
   end
 
   def test_excludes_auth_and_context_headers

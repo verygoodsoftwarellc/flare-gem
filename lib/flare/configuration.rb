@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "http_metrics_config"
+require_relative "revision"
 
 module Flare
   class Configuration
@@ -41,11 +42,6 @@ module Flare
     # Enable debug logging to see what Flare is doing.
     # Set FLARE_DEBUG=1 or configure debug: true in your initializer.
     attr_accessor :debug
-
-    # The deployed revision, usually a git SHA. Defaults to FLARE_REVISION;
-    # when neither is set, Flare::Revision looks at platform variables, a
-    # REVISION file, then git.
-    attr_accessor :revision
 
     def initialize
       @enabled = true
@@ -107,6 +103,21 @@ module Flare
         @http_metrics_config = @http_metrics_config.dup
       end
       yield @http_metrics_config
+    end
+
+    # The deployed revision, usually a git SHA, sent so Flare can mark deploys.
+    # Defaults to FLARE_REVISION; when neither is set, the first read asks
+    # Flare::Revision (platform variables, a REVISION file, then git).
+    def revision
+      return @revision if @revision_resolved
+
+      @revision_resolved = true
+      @revision = Revision.resolve(@revision)
+    end
+
+    def revision=(value)
+      @revision_resolved = false
+      @revision = value
     end
 
     private

@@ -3,14 +3,13 @@
 require "socket"
 
 require_relative "version"
-require_relative "revision"
 
 module Flare
   # Single source of truth for the headers that identify this client and its
   # version to the Flare API. The server parses the gem version out of the
   # User-Agent ("Flare Ruby/X.Y.Z") to gate version-dependent features, and
   # uses the X-Client-* headers to build a per-client picture. X-Client-Revision
-  # (when one resolves, see Revision) marks deploys on the charts.
+  # (when one resolves, see Configuration#revision) marks deploys on the charts.
   #
   # Safe to send on any request that targets the Flare API (metrics POST,
   # rules GET, trace-notify POST). Do NOT send these on the presigned R2 blob
@@ -30,7 +29,7 @@ module Flare
         "X-Client-Pid"              => Process.pid.to_s,
         "X-Client-Hostname"         => hostname
       }
-      revision = Revision.current
+      revision = Flare.configuration.revision
       headers["X-Client-Revision"] = revision if revision
       headers
     end

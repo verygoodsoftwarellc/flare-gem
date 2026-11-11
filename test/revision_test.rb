@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "flare/revision"
+require "minitest/mock"
 
 class RevisionTest < Minitest::Test
   SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -12,19 +13,14 @@ class RevisionTest < Minitest::Test
 
   def teardown
     FileUtils.remove_entry(@root)
-    Flare::Revision.reset!
   end
 
   def resolve(configured: nil, env: {})
-    Flare::Revision.resolve(configured: configured, env: env, root: @root)
+    Flare::Revision.resolve(configured, env: env, root: @root)
   end
 
   def test_configured_value_wins
-    assert_equal "configured", resolve(configured: "configured", env: { "FLARE_REVISION" => "env", "GIT_SHA" => SHA })
-  end
-
-  def test_flare_revision_beats_platform_variables
-    assert_equal "env", resolve(env: { "FLARE_REVISION" => "env", "HEROKU_SLUG_COMMIT" => SHA })
+    assert_equal "configured", resolve(configured: "configured", env: { "HEROKU_SLUG_COMMIT" => SHA })
   end
 
   def test_platform_variables_in_order
@@ -42,11 +38,16 @@ class RevisionTest < Minitest::Test
   end
 
   def test_blank_values_are_skipped
-    assert_equal SHA, resolve(configured: "  ", env: { "FLARE_REVISION" => "", "GIT_SHA" => " #{SHA}\n" })
+    assert_equal SHA, resolve(configured: "  ", env: { "HEROKU_SLUG_COMMIT" => "", "GIT_SHA" => " #{SHA}\n" })
   end
 
   def test_revision_file_when_no_variables
     File.write(File.join(@root, "REVISION"), "#{SHA}\n")
+    assert_equal SHA, resolve
+  end
+
+  def test_only_the_first_line_is_used
+    File.write(File.join(@root, "REVISION"), "\n#{SHA}\nbuilt by ci\n")
     assert_equal SHA, resolve
   end
 
@@ -83,11 +84,36 @@ class RevisionTest < Minitest::Test
     assert_predicate resolve(env: { "GIT_SHA" => +"abc" }), :frozen?
   end
 
-  def test_current_resolves_once
-    Flare::Revision.reset!
-    first = Flare::Revision.current
-    Flare::Revision.stub(:resolve, "changed") do
-      assert_same first, Flare::Revision.current
+  def test_configuration_defaults_to_flare_revision
+    with_env("FLARE_REVISION" => "from-env") do
+      assert_equal "from-env", Flare::Configuration.new.revision
     end
+  end
+
+  def test_configuration_resolves_once
+    config = Flare::Configuration.new
+    config.revision = nil
+    calls = 0
+    Flare::Revision.stub(:resolve, ->(_) { calls += 1; nil }) do
+      2.times { assert_nil config.revision }
+    end
+    assert_equal 1, calls
+  end
+
+  def test_setting_the_revision_after_a_read_takes_effect
+    config = Flare::Configuration.new
+    config.revision
+    config.revision = "later"
+    assert_equal "later", config.revision
+  end
+
+  private
+
+  def with_env(values)
+    saved = values.keys.to_h { |key| [key, ENV[key]] }
+    values.each { |key, value| ENV[key] = value }
+    yield
+  ensure
+    saved.each { |key, value| ENV[key] = value }
   end
 end
