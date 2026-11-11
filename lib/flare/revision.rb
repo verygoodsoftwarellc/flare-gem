@@ -24,27 +24,32 @@ module Flare
       "KAMAL_VERSION" => nil,
       # The whole image reference ("registry.fly.io/app:deployment-01J...@sha256:...").
       # Its tag names the deploy, and is the git SHA when deployed with --image-label.
-      "FLY_IMAGE_REF" => ->(ref) { ref.split("@", 2).first.split("/").last.split(":", 2)[1] },
+      "FLY_IMAGE_REF" => ->(ref) { ref[%r{:([^:/@]+)(?:@|\z)}, 1] },
       "GIT_SHA" => nil,
       "SOURCE_VERSION" => nil
     }.freeze
 
     def self.resolve(configured, env: ENV, root: app_root)
-      candidates = [configured]
-      PLATFORM_VARIABLES.each do |name, extract|
-        value = env[name]
-        candidates << (extract && value ? extract.call(value) : value)
-      end
-
-      revision = candidates.map { |value| clean(value) }.find { |value| value }
-      revision ||= clean(revision_file(root))
-      revision ||= clean(git_head(root))
+      revision = clean(configured) || platform_revision(env) ||
+        clean(revision_file(root)) || clean(git_head(root))
       revision&.freeze
     end
 
-    # The first line, stripped and capped, since it goes in a header.
+    # The first platform variable that holds a revision. Stops there, so a
+    # later variable is never parsed.
+    def self.platform_revision(env)
+      PLATFORM_VARIABLES.each do |name, extract|
+        value = env[name]
+        value = clean(extract && value ? extract.call(value) : value)
+        return value if value
+      end
+      nil
+    end
+
+    # Up to the first line break (CR or LF), stripped and capped, since it
+    # goes in a header.
     def self.clean(value)
-      value = value.to_s.strip.lines.first.to_s.strip
+      value = value.to_s.strip.split(/[\r\n]/, 2).first.to_s.strip
       return if value.empty?
 
       value[0, MAX_LENGTH]

@@ -37,6 +37,15 @@ class RevisionTest < Minitest::Test
     assert_equal "git", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app", "GIT_SHA" => "git" })
   end
 
+  def test_empty_fly_image_ref_is_skipped_not_an_error
+    assert_equal "configured", resolve(configured: "configured", env: { "FLY_IMAGE_REF" => "" })
+    assert_nil resolve(env: { "FLY_IMAGE_REF" => "" })
+  end
+
+  def test_a_carriage_return_ends_the_value
+    assert_equal SHA, resolve(env: { "GIT_SHA" => "#{SHA}\rinjected" })
+  end
+
   def test_blank_values_are_skipped
     assert_equal SHA, resolve(configured: "  ", env: { "HEROKU_SLUG_COMMIT" => "", "GIT_SHA" => " #{SHA}\n" })
   end
