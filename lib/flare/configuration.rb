@@ -42,6 +42,11 @@ module Flare
     # Set FLARE_DEBUG=1 or configure debug: true in your initializer.
     attr_accessor :debug
 
+    # The deployed revision, usually a git SHA. Defaults to FLARE_REVISION;
+    # when neither is set, Flare::Revision looks at platform variables, a
+    # REVISION file, then git.
+    attr_accessor :revision
+
     def initialize
       @enabled = true
       @retention_hours = 24
@@ -50,6 +55,7 @@ module Flare
       @ignore_request = ->(request) { false }
       @subscribe_patterns = DEFAULT_SUBSCRIBE_PATTERNS.dup
       @debug = ENV["FLARE_DEBUG"] == "1"
+      @revision = ENV["FLARE_REVISION"]
       @http_metrics_config = HttpMetricsConfig::DEFAULT
 
       # Environment-based defaults:
