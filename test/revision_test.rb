@@ -100,6 +100,19 @@ class RevisionTest < Minitest::Test
     assert_equal 1, calls
   end
 
+  # Regression: ISSUE-001 — a reader racing the first resolve got nil
+  # Found by /qa on 2026-11-11
+  # Report: .gstack/qa-reports/run-20261111T164002Z/qa-report-flare-gem-revision-2026-11-11.md
+  def test_concurrent_first_reads_all_get_the_resolved_value
+    config = Flare::Configuration.new
+    config.revision = nil
+    slow = ->(_) { sleep 0.05; "resolved" }
+    Flare::Revision.stub(:resolve, slow) do
+      values = 4.times.map { Thread.new { config.revision } }.map(&:value)
+      assert_equal ["resolved"], values.uniq
+    end
+  end
+
   def test_setting_the_revision_after_a_read_takes_effect
     config = Flare::Configuration.new
     config.revision

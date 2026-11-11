@@ -111,8 +111,11 @@ module Flare
     def revision
       return @revision if @revision_resolved
 
-      @revision_resolved = true
+      # Flag after the value, so a racing reader never sees the unresolved one.
+      # Two first readers may both resolve; they get the same answer.
       @revision = Revision.resolve(@revision)
+      @revision_resolved = true
+      @revision
     end
 
     def revision=(value)
