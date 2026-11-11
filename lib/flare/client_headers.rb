@@ -20,7 +20,7 @@ module Flare
   module ClientHeaders
     USER_AGENT = "Flare Ruby/#{Flare::VERSION}"
 
-    def self.to_h
+    def self.to_h(configuration = Flare.configuration)
       headers = {
         "User-Agent"                => USER_AGENT,
         "X-Client-Language"         => "ruby",
@@ -29,7 +29,7 @@ module Flare
         "X-Client-Pid"              => Process.pid.to_s,
         "X-Client-Hostname"         => hostname
       }
-      revision = Flare.configuration.revision
+      revision = configuration.revision
       headers["X-Client-Revision"] = revision if revision
       headers
     end
