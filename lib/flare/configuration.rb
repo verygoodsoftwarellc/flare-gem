@@ -8,6 +8,7 @@ module Flare
     attr_accessor :retention_hours
     attr_accessor :max_spans
     attr_accessor :ignore_request
+    attr_accessor :ignore_errors
     attr_writer :database_path
 
     # Spans: detailed trace data stored in SQLite (default: development only)
@@ -34,6 +35,12 @@ module Flare
 
     attr_accessor :subscribe_patterns
 
+    # Exceptions that jobs raise to wait or retry rather than to fail. A span
+    # that ends with one of these (or a subclass) counts as a success.
+    DEFAULT_IGNORE_ERRORS = %w[
+      GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
+    ].freeze
+
     # HTTP metrics path tracking configuration.
     # Controls which outgoing HTTP paths are tracked with detail vs collapsed to "*".
     attr_reader :http_metrics_config
@@ -48,6 +55,7 @@ module Flare
       @max_spans = 10_000
       @database_path = nil
       @ignore_request = ->(request) { false }
+      @ignore_errors = DEFAULT_IGNORE_ERRORS.dup
       @subscribe_patterns = DEFAULT_SUBSCRIBE_PATTERNS.dup
       @debug = ENV["FLARE_DEBUG"] == "1"
       @http_metrics_config = HttpMetricsConfig::DEFAULT

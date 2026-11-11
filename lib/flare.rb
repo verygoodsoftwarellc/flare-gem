@@ -339,7 +339,8 @@ module Flare
     @metric_storage ||= MetricStorage.new
     metric_processor = MetricSpanProcessor.new(
       storage: @metric_storage,
-      http_metrics_config: configuration.http_metrics_config
+      http_metrics_config: configuration.http_metrics_config,
+      ignore_errors: configuration.ignore_errors
     )
     OpenTelemetry.tracer_provider.add_span_processor(metric_processor)
 

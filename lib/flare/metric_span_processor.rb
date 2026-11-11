@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "concurrent/map"
+require_relative "configuration"
 require_relative "metric_key"
 require_relative "http_metrics_config"
 require_relative "sql_mask"
@@ -30,9 +32,11 @@ module Flare
       "solid_cache" => "solid_cache"
     }.freeze
 
-    def initialize(storage:, http_metrics_config: nil)
+    def initialize(storage:, http_metrics_config: nil, ignore_errors: Configuration::DEFAULT_IGNORE_ERRORS)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
+      @ignore_errors = Array(ignore_errors).map { |name| name.to_s.delete_prefix("::") }.uniq.freeze
+      @ignored_exception_types = Concurrent::Map.new
       @pid = $$
     end
 
@@ -300,8 +304,34 @@ module Flare
       end
     end
 
+    # An error status counts unless the exception that ended the span is one
+    # of the ignored classes or a subclass of one.
     def span_error?(span)
-      span.status&.code == OpenTelemetry::Trace::Status::ERROR
+      return false if span.status&.code != OpenTelemetry::Trace::Status::ERROR
+
+      type = exception_type(span)
+      type.nil? || !ignored_exception_type?(type)
+    end
+
+    def exception_type(span)
+      return nil if @ignore_errors.empty?
+
+      event = span.events&.reverse_each&.find { |e| e.name == "exception" }
+      event&.attributes&.[]("exception.type")&.to_s
+    end
+
+    def ignored_exception_type?(type)
+      @ignored_exception_types.compute_if_absent(type) do
+        names = exception_class(type)&.ancestors&.map(&:name) || [type.delete_prefix("::")]
+        names.any? { |name| @ignore_errors.include?(name) }
+      end
+    end
+
+    def exception_class(type)
+      klass = Object.const_get(type)
+      klass if klass.is_a?(Class)
+    rescue NameError, LoadError
+      nil
     end
 
     def extract_job_system(span)
