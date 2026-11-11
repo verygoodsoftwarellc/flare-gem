@@ -24,7 +24,7 @@ module Flare
       "KAMAL_VERSION" => nil,
       # The whole image reference ("registry.fly.io/app:deployment-01J...@sha256:...").
       # Its tag names the deploy, and is the git SHA when deployed with --image-label.
-      "FLY_IMAGE_REF" => ->(ref) { ref[%r{:([^:/@]+)(?:@|\z)}, 1] },
+      "FLY_IMAGE_REF" => ->(ref) { ref.split("@", 2).first.to_s[%r{:([^:/]+)\z}, 1] },
       "GIT_SHA" => nil,
       "SOURCE_VERSION" => nil
     }.freeze

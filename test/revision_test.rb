@@ -35,6 +35,8 @@ class RevisionTest < Minitest::Test
 
   def test_fly_image_ref_without_a_tag_falls_through
     assert_equal "git", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app", "GIT_SHA" => "git" })
+    assert_equal "git", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app@sha256:#{"f" * 64}", "GIT_SHA" => "git" })
+    assert_equal "git", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io:443/my-app", "GIT_SHA" => "git" })
   end
 
   def test_empty_fly_image_ref_is_skipped_not_an_error
