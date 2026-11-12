@@ -4,11 +4,25 @@ require_relative "test_helper"
 require "flare/metric_storage"
 require "flare/metric_span_processor"
 
+unless defined?(GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError)
+  module GoodJob
+    module ActiveJobExtensions
+      module Concurrency
+        class ConcurrencyExceededError < StandardError; end
+        class ThrottleExceededError < ConcurrencyExceededError; end
+      end
+    end
+  end
+end
+
 class MetricSpanProcessorTest < Minitest::Test
+  class RetryLaterError < StandardError; end
+  class RetrySoonerError < RetryLaterError; end
+
   def setup
     @storage = Flare::MetricStorage.new
     @http_config = Flare::HttpMetricsConfig.new
-    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS)
   end
 
   def test_sql_metric_names_ignore_words_inside_values_and_comments
@@ -1210,11 +1224,87 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET *", key.target
   end
 
+  def test_default_ignores_good_job_concurrency_errors_and_subclasses
+    @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
+    @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
+
+    assert_equal({ count: 2, sum_ms: 100, error_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_exception_not_ignored_still_counts_as_error
+    @processor.on_end(failed_job_span("RuntimeError"))
+
+    assert_equal({ count: 1, sum_ms: 50, error_count: 1 }, @storage.drain.values.first)
+  end
+
+  def test_error_status_without_exception_event_still_counts_as_error
+    @processor.on_end(failed_job_span(nil))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  # Regression: ISSUE-001 — a retried exception is recorded on the child
+  # enqueue_retry span, so the job's process span only has the status.
+  # Found by /qa on 2026-11-11
+  def test_ignores_retried_exception_named_only_in_the_job_status
+    span = failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError")
+    span.events.clear
+    @processor.on_end(span)
+
+    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_custom_ignore_errors_match_the_class_and_its_subclasses
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS + [RetryLaterError.name])
+
+    processor.on_end(failed_job_span(RetryLaterError.name))
+    processor.on_end(failed_job_span(RetrySoonerError.name))
+    processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
+    processor.on_end(failed_job_span("ArgumentError"))
+
+    assert_equal({ count: 4, sum_ms: 200, error_count: 1 }, @storage.drain.values.first)
+  end
+
+  def test_ignore_errors_match_unloadable_classes_by_exact_name
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: ["Missing::RetryError"])
+
+    processor.on_end(failed_job_span("Missing::RetryError"))
+    processor.on_end(failed_job_span("Missing::RetryErrorSubclass"))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  def test_replacing_ignore_errors_counts_every_exception
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: [])
+
+    processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  def test_ignore_errors_apply_to_database_and_http_spans
+    exception = exception_event("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError")
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "db.system" => "postgresql", "db.statement" => "SELECT 1 FROM posts" }, status: OpenTelemetry::Trace::Status.error, events: [exception]))
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.method" => "GET", "http.host" => "api.example.com" }, status: OpenTelemetry::Trace::Status.error, events: [exception]))
+
+    drained = @storage.drain
+    assert_equal %w[db http], drained.keys.map(&:namespace).sort
+    assert_equal [0, 0], drained.values.map { |counter| counter[:error_count] }
+  end
+
+  def test_configuration_defaults_ignore_errors_without_sharing_the_default_list
+    config = Flare::Configuration.new
+    config.ignore_errors << "MyError"
+
+    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError", "MyError"], config.ignore_errors
+    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"], Flare::Configuration.new.ignore_errors
+  end
+
   # Mock span class for testing
   class MockSpan
-    attr_reader :kind, :parent_span_id, :name, :attributes, :start_timestamp, :end_timestamp, :status
+    attr_reader :kind, :parent_span_id, :name, :attributes, :start_timestamp, :end_timestamp, :status, :events
 
-    def initialize(kind:, parent_span_id:, attributes: {}, start_ns: 0, end_ns: 100_000_000, name: "test_span", status: nil)
+    def initialize(kind:, parent_span_id:, attributes: {}, start_ns: 0, end_ns: 100_000_000, name: "test_span", status: nil, events: nil)
       @kind = kind
       @parent_span_id = parent_span_id
       @name = name
@@ -1222,6 +1312,25 @@ class MetricSpanProcessorTest < Minitest::Test
       @start_timestamp = start_ns
       @end_timestamp = end_ns
       @status = status
+      @events = events
     end
+  end
+
+  private
+
+  def failed_job_span(exception_type)
+    MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      name: "ThrottledJob process",
+      attributes: { "code.namespace" => "ThrottledJob", "code.function" => "perform", "messaging.system" => "active_job" },
+      end_ns: 50_000_000,
+      status: OpenTelemetry::Trace::Status.error("Unexpected ActiveJob Error #{exception_type}"),
+      events: exception_type ? [exception_event(exception_type)] : []
+    )
+  end
+
+  def exception_event(exception_type)
+    OpenTelemetry::SDK::Trace::Event.new("exception", { "exception.type" => exception_type, "exception.message" => exception_type })
   end
 end

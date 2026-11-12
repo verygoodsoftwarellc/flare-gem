@@ -49,6 +49,9 @@ module Flare
         #   request.path.start_with?("/health")
         # }
 
+        # Exceptions (and subclasses) that don't count as errors in metrics.
+        # config.ignore_errors << "MyApp::RetryLaterError"
+
         # ── Metrics (remote monitoring) ────────────────────────────────────
         # Metrics aggregate span data into counts, durations, and error rates.
         # Enabled by default in development and production (disabled in test).

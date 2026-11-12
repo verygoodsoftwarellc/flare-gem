@@ -135,6 +135,9 @@ Flare.configure do |config|
     request.path.start_with?("/health")
   }
 
+  # Exceptions that don't count as errors in metrics (see below)
+  config.ignore_errors << "MyApp::RetryLaterError"
+
   # Subscribe to custom notification prefixes (default: ["app."])
   config.subscribe_patterns << "mycompany."
 
@@ -143,6 +146,15 @@ Flare.configure do |config|
   # REVISION file, or git rev-parse HEAD)
   config.revision = ENV["MY_BUILD_SHA"]
 end
+```
+
+### Errors that aren't failures
+
+Some exceptions are control flow. A GoodJob job with `perform_limit` or `perform_throttle` raises `GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError` (or its subclass `ThrottleExceededError`) to wait its turn, then retries. Flare counts a span that ends with an exception in `config.ignore_errors`, or a subclass of one, as a success: it still counts toward throughput and duration, just not the error rate. Traces still record the exception. Append your own class names, or assign a new list to replace the default:
+
+```ruby
+config.ignore_errors << "MyApp::RetryLaterError"
+config.ignore_errors = []  # count every exception as an error
 ```
 
 ## Custom Instrumentation
