@@ -1331,6 +1331,6 @@ class MetricSpanProcessorTest < Minitest::Test
   end
 
   def exception_event(exception_type)
-    OpenTelemetry::SDK::Trace::Event.new(name: "exception", attributes: { "exception.type" => exception_type, "exception.message" => exception_type })
+    OpenTelemetry::SDK::Trace::Event.new("exception", { "exception.type" => exception_type, "exception.message" => exception_type })
   end
 end
