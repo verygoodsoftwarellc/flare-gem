@@ -85,6 +85,10 @@ module Flare
         h.allow %r{/api/metrics}
       end
 
+      config.host "ingest.flare.am" do |h|
+        h.allow %r{/api/metrics}
+      end
+
       config.host "www.flippercloud.io" do |h|
         h.map %r{/adapter/features/[^/]+/(boolean|actors|groups|percentage_of_actors|percentage_of_time|expression|clear)}, "/adapter/features/:name/:gate"
         h.map %r{/adapter/features/[^/]+}, "/adapter/features/:name"
