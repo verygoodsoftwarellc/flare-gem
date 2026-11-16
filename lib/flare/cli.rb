@@ -6,6 +6,7 @@ module Flare
   module CLI
     COMMANDS = {
       "setup" => "Authenticate and configure Flare for this project",
+      "connect" => "Connect your AI assistants to Flare",
       "doctor" => "Check your Flare setup for issues",
       "status" => "Show current Flare configuration",
       "requests" => "List recent requests from local development spans",
@@ -23,6 +24,9 @@ module Flare
         require_relative "cli/setup_command"
         force = argv.include?("--force")
         SetupCommand.new(force: force).run
+      when "connect"
+        require_relative "cli/ai_clients_setup"
+        AIClientsSetup.new(host: ENV.fetch("FLARE_HOST", "https://flare.am")).run(ask: false)
       when "doctor"
         require_relative "cli/doctor_command"
         DoctorCommand.new.run
