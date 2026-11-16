@@ -113,6 +113,8 @@ class AIClientsSetupTest < Minitest::Test
     assert_empty runner.commands
     assert_includes out, "already has a different flare server"
     assert_includes out, "claude mcp remove flare -s user"
+    refute_includes out, "Ask:"
+    refute run_setup(FakeRunner.new, input: "", ask: false, result: true)
   end
 
   def test_leaves_codex_alone_when_already_connected

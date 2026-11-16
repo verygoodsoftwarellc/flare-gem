@@ -83,7 +83,10 @@ module Flare
       false
     end
 
+    # Suggests a first question only when some client is, or is about to be,
+    # pointed at Flare.
     def connect(clients)
+      @ready = false
       next_steps = clients.filter_map do |client|
         hint = send("connect_#{client}")
         "#{CLIENTS[client]}: #{hint}" if hint
@@ -95,7 +98,7 @@ module Flare
         next_steps.each { |line| puts "    #{line}" }
         puts
         puts "  Then ask: #{FIRST_PROMPT.inspect}"
-      else
+      elsif @ready
         puts "  Ask: #{FIRST_PROMPT.inspect}"
       end
     end
@@ -167,16 +170,21 @@ module Flare
 
     # Each outcome prints one line and returns what's left to do in the client.
     def connected(client, hint, where: nil)
+      @ready = true
       puts "  #{checkmark} Connected #{CLIENTS[client]}#{" in #{where}" if where}"
       hint
     end
 
     def already(client)
+      @ready = true
       puts "  #{checkmark} #{CLIENTS[client]} is already connected to Flare"
       nil
     end
 
+    # Nothing broke, but this client isn't pointed at Flare, so it counts as
+    # a failure for `flare connect`'s exit status.
     def different(client, how)
+      @failed = true
       puts "  #{warn_mark} #{CLIENTS[client]} already has a different #{SERVER_NAME} server, so it was left alone."
       puts "    To replace it, #{how}, then run #{bold("flare connect")}."
       nil
@@ -219,12 +227,13 @@ module Flare
     end
 
     # Writes to a temporary file and renames it, so a crash never leaves the
-    # client with half a config. Keeps the file's permissions.
+    # client with half a config. The temporary file is created with the
+    # original's permissions, so a private config is never readable by others.
     def write_atomically(path, contents)
       FileUtils.mkdir_p(File.dirname(path))
       mode = File.exist?(path) ? File.stat(path).mode & 0o777 : 0o644
       temporary = "#{path}.flare-#{Process.pid}"
-      File.write(temporary, contents)
+      File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, mode) { |file| file.write(contents) }
       File.chmod(mode, temporary)
       File.rename(temporary, path)
     ensure
