@@ -3,6 +3,7 @@
 require "json"
 require "open3"
 require "fileutils"
+require "securerandom"
 require_relative "output"
 
 module Flare
@@ -232,12 +233,17 @@ module Flare
     def write_atomically(path, contents)
       FileUtils.mkdir_p(File.dirname(path))
       mode = File.exist?(path) ? File.stat(path).mode & 0o777 : 0o644
-      temporary = "#{path}.flare-#{Process.pid}"
-      File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, mode) { |file| file.write(contents) }
+      temporary = "#{path}.flare-#{SecureRandom.hex(8)}"
+      created = false
+      File.open(temporary, File::WRONLY | File::CREAT | File::EXCL, mode) do |file|
+        created = true
+        file.write(contents)
+      end
       File.chmod(mode, temporary)
       File.rename(temporary, path)
+      created = false
     ensure
-      File.delete(temporary) if temporary && File.exist?(temporary)
+      File.delete(temporary) if created && File.exist?(temporary)
     end
   end
 end
