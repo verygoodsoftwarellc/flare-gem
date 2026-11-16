@@ -173,9 +173,18 @@ class AIClientsSetupTest < Minitest::Test
     assert_equal URL, cursor_config.dig("mcpServers", "flare", "url")
   end
 
+  # Regression: ISSUE-001 — flare connect exited 0 when a client failed to connect
+  # Found by /qa on 2026-11-16
+  # Report: .gstack/qa-reports/qa-report-flare-connect-2026-11-16.md
+  def test_run_says_whether_every_client_connected
+    install("claude")
+    assert run_setup(FakeRunner.new, input: "", ask: false, result: true)
+    refute run_setup(FakeRunner.new(["claude", "mcp", "add"] => ["boom\n", false]), input: "", ask: false, result: true)
+  end
+
   private
 
-  def run_setup(runner, input:, ask: true)
+  def run_setup(runner, input:, ask: true, result: false)
     setup = Flare::AIClientsSetup.new(
       host: "https://flare.am/",
       input: StringIO.new(input),
@@ -184,8 +193,9 @@ class AIClientsSetupTest < Minitest::Test
       platform: "arm64-darwin25",
       runner: runner
     )
-    out, = capture_io { setup.run(ask: ask) }
-    out
+    connected = nil
+    out, = capture_io { connected = setup.run(ask: ask) }
+    result ? connected : out
   end
 
   def install(*names)

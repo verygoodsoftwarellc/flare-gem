@@ -50,8 +50,10 @@ module Flare
     end
 
     # `flare setup` asks first, since this changes other apps' settings.
-    # `flare connect` is the asking.
+    # `flare connect` is the asking. Returns false if any client failed to
+    # connect, so `flare connect` can exit non-zero.
     def run(ask: true)
+      @failed = false
       puts
       puts bold("Connect your AI assistant")
 
@@ -59,10 +61,10 @@ module Flare
       if clients.empty?
         puts "  No AI clients found. To connect one later, add #{url} to it as a remote MCP server."
         puts "  See #{@host}/docs/mcp"
-        return
+      elsif !ask || confirmed?(clients)
+        connect(clients)
       end
-
-      connect(clients) if !ask || confirmed?(clients)
+      !@failed
     end
 
     private
@@ -181,6 +183,7 @@ module Flare
     end
 
     def failed(client, command: nil, output: nil)
+      @failed = true
       reason = output.to_s.lines.map(&:strip).reject(&:empty?).first
       puts "  #{xmark} Couldn't connect #{CLIENTS[client]}#{": #{reason}" if reason}"
       puts "    Run it yourself: #{command.join(" ")}" if command

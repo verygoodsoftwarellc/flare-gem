@@ -26,7 +26,7 @@ module Flare
         SetupCommand.new(force: force).run
       when "connect"
         require_relative "cli/ai_clients_setup"
-        AIClientsSetup.new.run(ask: false)
+        exit 1 unless AIClientsSetup.new.run(ask: false)
       when "doctor"
         require_relative "cli/doctor_command"
         DoctorCommand.new.run
