@@ -13,6 +13,7 @@ module Flare
   class AIClientsSetup
     include CLI::Output
 
+    DEFAULT_HOST = "https://flare.am"
     SERVER_NAME = "flare"
     FIRST_PROMPT = "Using Flare, what's slowest in production over the last 24 hours?"
     CLIENTS = {
@@ -38,17 +39,14 @@ module Flare
       end
     end
 
-    def initialize(host:, input: $stdin, env: ENV, home: Dir.home, platform: RUBY_PLATFORM, runner: Runner.new)
+    def initialize(host: ENV.fetch("FLARE_HOST", DEFAULT_HOST), input: $stdin, env: ENV, home: Dir.home, platform: RUBY_PLATFORM, runner: Runner.new)
       @host = host.chomp("/")
+      @url = "#{@host}/mcp"
       @input = input
       @env = env
       @home = home
       @platform = platform
       @runner = runner
-    end
-
-    def url
-      "#{@host}/mcp"
     end
 
     # `flare setup` asks first, since this changes other apps' settings.
@@ -67,17 +65,19 @@ module Flare
       connect(clients) if !ask || confirmed?(clients)
     end
 
+    private
+
+    attr_reader :url
+
+    # A closed stdin (a script, an agent) counts as no.
     def confirmed?(clients)
       print "  Found #{clients.map { |client| CLIENTS[client] }.join(", ")}. Connect #{clients.one? ? "it" : "them"} to Flare? (Y/n): "
       answer = @input.gets
-      if answer.nil?
-        puts
-        puts "  Skipped. Run #{bold("flare connect")} in a terminal to connect them."
-        return false
-      end
-      return true if answer.strip.empty? || answer.strip.downcase.start_with?("y")
+      reply = answer.to_s.strip.downcase
+      return true if answer && (reply.empty? || reply.start_with?("y"))
 
-      puts "  Skipped. Run #{bold("flare connect")} any time to connect them."
+      puts if answer.nil?
+      puts "  Skipped. Run #{bold("flare connect")} #{answer.nil? ? "in a terminal" : "any time"} to connect them."
       false
     end
 
@@ -107,8 +107,6 @@ module Flare
       end
     end
 
-    private
-
     def connect_claude
       current = claude_config.dig("mcpServers", SERVER_NAME)
       if current
@@ -118,10 +116,9 @@ module Flare
 
       command = ["claude", "mcp", "add", "--transport", "http", "-s", "user", SERVER_NAME, url]
       output, success = @runner.capture(*command)
-      return failed(:claude, output, command) unless success
+      return failed(:claude, command: command, output: output) unless success
 
-      puts "  #{checkmark} Connected Claude Code"
-      "run /mcp, choose #{SERVER_NAME}, and sign in"
+      connected(:claude, "run /mcp, choose #{SERVER_NAME}, and sign in")
     end
 
     def connect_codex
@@ -133,14 +130,13 @@ module Flare
         return different(:codex, "run #{bold("codex mcp remove #{SERVER_NAME}")}") unless matching
         return already(:codex) unless current["enabled"] == false
       elsif !output.downcase.match?(/not found|no mcp server/)
-        return failed(:codex, output, ["codex", "mcp", "get", SERVER_NAME])
+        return failed(:codex, command: ["codex", "mcp", "get", SERVER_NAME], output: output)
       end
 
       command = ["codex", "mcp", "add", SERVER_NAME, "--url", url]
-      return failed(:codex, "", command) unless @runner.attached(*command)
+      return failed(:codex, command: command) unless @runner.attached(*command)
 
-      puts "  #{checkmark} Connected Codex"
-      "run `codex mcp login #{SERVER_NAME}` if it hasn't asked you to sign in"
+      connected(:codex, "run `codex mcp login #{SERVER_NAME}` if it hasn't asked you to sign in")
     end
 
     # Sets mcpServers.flare in ~/.cursor/mcp.json, keeping everything else in it.
@@ -157,15 +153,20 @@ module Flare
 
       servers[SERVER_NAME] = entry
       write_atomically(path, JSON.pretty_generate(document) + "\n")
-      puts "  #{checkmark} Connected Cursor in ~/.cursor/mcp.json"
-      "open Cursor Settings → MCP and sign in to #{SERVER_NAME}"
+      connected(:cursor, "open Cursor Settings → MCP and sign in to #{SERVER_NAME}", where: "~/.cursor/mcp.json")
     rescue JSON::ParserError, SystemCallError => e
-      failed(:cursor, e.message, nil)
+      failed(:cursor, output: e.message)
     end
 
     # Claude Desktop keeps remote servers in your account, not a file.
     def connect_claude_desktop
       "in Settings, add a custom connector with the URL #{url}"
+    end
+
+    # Each outcome prints one line and returns what's left to do in the client.
+    def connected(client, hint, where: nil)
+      puts "  #{checkmark} Connected #{CLIENTS[client]}#{" in #{where}" if where}"
+      hint
     end
 
     def already(client)
@@ -179,7 +180,7 @@ module Flare
       nil
     end
 
-    def failed(client, output, command)
+    def failed(client, command: nil, output: nil)
       reason = output.to_s.lines.map(&:strip).reject(&:empty?).first
       puts "  #{xmark} Couldn't connect #{CLIENTS[client]}#{": #{reason}" if reason}"
       puts "    Run it yourself: #{command.join(" ")}" if command

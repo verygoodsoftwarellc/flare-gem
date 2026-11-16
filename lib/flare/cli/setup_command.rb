@@ -18,7 +18,7 @@ module Flare
     include CLI::Output
     include CLI::Project
 
-    DEFAULT_HOST = "https://flare.am"
+    DEFAULT_HOST = AIClientsSetup::DEFAULT_HOST
     TIMEOUT_SECONDS = 300 # 5 minutes
     CLIENT_READ_TIMEOUT = 1
 
@@ -86,7 +86,7 @@ module Flare
       #   end
     RUBY
 
-    def initialize(force: false, ai_clients: AIClientsSetup.new(host: ENV.fetch("FLARE_HOST", DEFAULT_HOST)))
+    def initialize(force: false, ai_clients: AIClientsSetup.new)
       @force = force
       @ai_clients = ai_clients
     end
