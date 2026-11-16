@@ -402,10 +402,12 @@ class DoctorCommandTest < Minitest::Test
     File.write(File.join(@dir, ".gitignore"), "/log\n")
     FileUtils.mkdir_p(File.join(@dir, "db"))
 
-    setup_out, = capture_io { Flare::SetupCommand.new.run }
+    no_clients = Flare::AIClientsSetup.new(host: "https://flare.am", env: { "PATH" => "" }, home: @dir)
+    setup_out, = capture_io { Flare::SetupCommand.new(ai_clients: no_clients).run }
     out, = capture_io { Flare::DoctorCommand.new.run }
 
     assert_includes setup_out, "skipping auth"
+    assert_includes setup_out, "No AI clients found"
     assert_includes out, ".gitignore entries present"
     assert_includes out, "Everything looks good!"
   end

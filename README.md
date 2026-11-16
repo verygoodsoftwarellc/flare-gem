@@ -45,6 +45,7 @@ The setup command will:
 1. Authenticate with flare.am to configure metrics
 2. Create a config initializer with sensible defaults
 3. Update .gitignore
+4. Offer to connect Claude Code, Codex and Cursor to Flare's MCP server, so you can ask your AI assistant about your app's performance. Each one signs in to Flare the first time it connects.
 
 Start your Rails server and visit `/flare` to see the dashboard.
 
@@ -58,6 +59,7 @@ To enable metrics, set `FLARE_KEY` in your environment (get one at [flare.am](ht
 
 ```bash
 flare setup    # Authenticate and configure Flare
+flare connect  # Connect your AI assistants to Flare
 flare doctor   # Check your setup for issues
 flare status   # Show current configuration
 flare requests # List recent requests from local development spans

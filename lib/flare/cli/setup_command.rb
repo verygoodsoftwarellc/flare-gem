@@ -11,13 +11,14 @@ require "fileutils"
 require "timeout"
 require_relative "output"
 require_relative "project"
+require_relative "ai_clients_setup"
 
 module Flare
   class SetupCommand
     include CLI::Output
     include CLI::Project
 
-    DEFAULT_HOST = "https://flare.am"
+    DEFAULT_HOST = AIClientsSetup::DEFAULT_HOST
     TIMEOUT_SECONDS = 300 # 5 minutes
     CLIENT_READ_TIMEOUT = 1
 
@@ -85,14 +86,16 @@ module Flare
       #   end
     RUBY
 
-    def initialize(force: false)
+    def initialize(force: false, ai_clients: AIClientsSetup.new)
       @force = force
+      @ai_clients = ai_clients
     end
 
     def run
       authenticate
       create_initializer
       add_gitignore_entries
+      @ai_clients.run
 
       puts
       puts "#{green("Setup complete!")}"
