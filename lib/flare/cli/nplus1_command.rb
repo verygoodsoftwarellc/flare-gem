@@ -49,12 +49,10 @@ module Flare
 
     def query?(span)
       props = span[:properties]
-      statement = props["db.statement"]
-      return false unless statement && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].downcase.include?(pattern) }
+      return false unless props["db.statement"] && Storage::SQLite::SPAN_CATEGORIES["queries"].any? { |pattern| span[:name].downcase.include?(pattern) }
 
-      # Active Record's bookkeeping repeats by design. Transaction statements
-      # from elsewhere have no name, so they're also matched by their text.
-      !Storage::SQLite::BOOKKEEPING_QUERY_NAMES.include?(props["name"]) && !Storage::SQLite::TRANSACTION_STATEMENTS.include?(statement.to_s.strip.upcase)
+      # Active Record's bookkeeping repeats by design.
+      !Storage::SQLite.bookkeeping_query?(props)
     end
 
     # The statement with its values taken out, so one query run with different
