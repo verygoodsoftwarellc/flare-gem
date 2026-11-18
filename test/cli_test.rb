@@ -689,7 +689,7 @@ class SetupCommandExchangeTest < Minitest::Test
   end
 
   def test_returns_the_token
-    assert_equal "tok_123", exchange_with_response("200 OK", '{"token":"tok_123"}').first
+    assert_equal "tok_123", exchange_with_response('{"token":"tok_123"}').first
   end
 
   def test_explains_a_refused_connection
@@ -702,12 +702,12 @@ class SetupCommandExchangeTest < Minitest::Test
   end
 
   def test_explains_a_response_that_is_not_json
-    _, err = exchange_with_response("200 OK", "<html>Bad gateway</html>")
+    _, err = exchange_with_response("<html>Bad gateway</html>")
     assert_exits_with_retry_hint(err)
   end
 
   def test_reports_json_without_a_token_object
-    token, err = exchange_with_response("200 OK", "[]")
+    token, err = exchange_with_response("[]")
     assert_nil token
     assert_includes err, "No token received"
   end
@@ -726,9 +726,9 @@ class SetupCommandExchangeTest < Minitest::Test
     assert_includes err, "flare setup"
   end
 
-  # Answers one request with the given status and body, then returns
-  # [token, stderr]; token is nil when setup exited.
-  def exchange_with_response(status, body)
+  # Answers one request with 200 and the body, then returns [token, stderr];
+  # token is nil when setup exited.
+  def exchange_with_response(body)
     server = TCPServer.new("127.0.0.1", 0)
     ENV["FLARE_HOST"] = "http://127.0.0.1:#{server.addr[1]}"
     responder = Thread.new do
@@ -737,7 +737,7 @@ class SetupCommandExchangeTest < Minitest::Test
         length = line[/\AContent-Length: (\d+)/i, 1]&.to_i || length
       end
       client.read(length.to_i)
-      client.write("HTTP/1.1 #{status}\r\nContent-Type: application/json\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
+      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
       client.close
     end
 
@@ -745,11 +745,10 @@ class SetupCommandExchangeTest < Minitest::Test
     _, err = capture_io do
       token = Flare::SetupCommand.new(force: false).send(:exchange_code, "code", "verifier")
     rescue SystemExit
-      token = nil
     end
     [token, err]
   ensure
-    responder&.join(5)
     server&.close
+    responder&.join(5)
   end
 end
