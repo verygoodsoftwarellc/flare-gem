@@ -271,8 +271,14 @@ module Flare
       end
 
       token
-    rescue JSON::ParserError, Timeout::Error, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse => e
-      $stderr.puts "Couldn't finish signing in to Flare: #{e.message}"
+    rescue Timeout::Error
+      exchange_failed("Flare didn't answer in time")
+    rescue JSON::ParserError, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse => e
+      exchange_failed(e.message)
+    end
+
+    def exchange_failed(reason)
+      $stderr.puts "Couldn't finish signing in to Flare: #{reason}"
       $stderr.puts "Run #{bold("flare setup")} again."
       exit 1
     end
