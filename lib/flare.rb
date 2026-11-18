@@ -438,11 +438,18 @@ module Flare
 
     # Auto-subscribe to custom patterns (default: "app.*")
     # This lets users just do: ActiveSupport::Notifications.instrument("app.whatever") { }
+    @subscribed_patterns = []
     subscribe_to_custom_patterns
   end
 
+  # Runs again after the app's initializers, which Rails loads after
+  # configure_opentelemetry, for any prefixes they added. Each prefix is
+  # subscribed once.
   def subscribe_to_custom_patterns
-    configuration.subscribe_patterns.each do |prefix|
+    return unless @subscribed_patterns
+
+    (configuration.subscribe_patterns.uniq - @subscribed_patterns).each do |prefix|
+      @subscribed_patterns << prefix
       # Subscribe to all notifications starting with this prefix
       pattern = /\A#{Regexp.escape(prefix)}/
       default_transformer = ->(payload) {

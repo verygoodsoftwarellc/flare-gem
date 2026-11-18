@@ -98,7 +98,7 @@ The `Flare::Engine` runs initializers in a specific order:
 2. `flare.static_assets` - serves `/flare-assets` from engine's `public/` directory
 3. `flare.opentelemetry` (before `build_middleware_stack`) - configures OTel SDK and instrumentations so Rack/ActionPack middleware gets inserted
 4. `flare.routes` (before `add_routing_paths`) - auto-mounts engine at `/flare` in development/test
-5. `config.after_initialize` - starts the `MetricFlusher` (after user initializers have run so config is applied)
+5. `config.after_initialize` - subscribes to any `subscribe_patterns` the app's initializers added, and starts the `MetricFlusher` (after user initializers have run so config is applied)
 
 ## OTel Instrumentations
 
