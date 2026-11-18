@@ -29,7 +29,18 @@ class CLILocaleTest < Minitest::Test
     FileUtils.remove_entry(@tmp)
   end
 
-  def test_doctor_reads_utf8_files_without_a_utf8_locale
+  # Plain ASCII .env and .gitignore, so only the initializer setup wrote isn't.
+  def test_doctor_reads_the_setup_initializer_without_a_utf8_locale
+    File.write(File.join(@app, ".env"), "FLARE_KEY=abc\n")
+    File.write(File.join(@app, ".gitignore"), "/.env*\n/db/flare.sqlite3*\n")
+
+    out, err, status = flare("doctor")
+
+    assert status.success?, err
+    assert_includes out, "Everything looks good!"
+  end
+
+  def test_doctor_reads_utf8_env_and_gitignore_without_a_utf8_locale
     out, err, status = flare("doctor")
 
     assert status.success?, err
@@ -60,11 +71,11 @@ class CLILocaleTest < Minitest::Test
 
   def flare(*args)
     env = {
-      "LC_ALL" => "C", "LANG" => nil, "LC_CTYPE" => nil,
+      "LC_ALL" => "C",
       "HOME" => @home, "PATH" => "#{@home}/bin:/usr/bin:/bin",
       "XDG_CONFIG_HOME" => nil, "CLAUDE_CONFIG_DIR" => nil, "FLARE_HOST" => nil,
-      "FLARE_KEY" => nil, "RAILS_ENV" => "production"
+      "FLARE_KEY" => nil, "RAILS_ENV" => nil
     }
-    Open3.capture3(env, RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args, chdir: @app, stdin_data: "")
+    Open3.capture3(env, RbConfig.ruby, "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe", "flare"), *args, chdir: @app)
   end
 end
