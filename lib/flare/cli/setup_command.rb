@@ -273,7 +273,7 @@ module Flare
       token
     rescue Timeout::Error
       exchange_failed("Flare didn't answer in time")
-    rescue JSON::ParserError, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse => e
+    rescue JSON::ParserError, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError => e
       exchange_failed(e.message)
     end
 

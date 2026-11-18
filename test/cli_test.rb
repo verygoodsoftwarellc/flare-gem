@@ -706,6 +706,11 @@ class SetupCommandExchangeTest < Minitest::Test
     assert_exits_with_retry_hint(err)
   end
 
+  def test_explains_a_malformed_response_header
+    _, err = exchange_with_response('{"token":"tok_123"}', content_length: "abc")
+    assert_exits_with_retry_hint(err)
+  end
+
   def test_reports_json_without_a_token_object
     token, err = exchange_with_response("[]")
     assert_nil token
@@ -728,7 +733,7 @@ class SetupCommandExchangeTest < Minitest::Test
 
   # Answers one request with 200 and the body, then returns [token, stderr];
   # token is nil when setup exited.
-  def exchange_with_response(body)
+  def exchange_with_response(body, content_length: body.bytesize)
     server = TCPServer.new("127.0.0.1", 0)
     ENV["FLARE_HOST"] = "http://127.0.0.1:#{server.addr[1]}"
     responder = Thread.new do
@@ -737,7 +742,7 @@ class SetupCommandExchangeTest < Minitest::Test
         length = line[/\AContent-Length: (\d+)/i, 1]&.to_i || length
       end
       client.read(length.to_i)
-      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}")
+      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{content_length}\r\nConnection: close\r\n\r\n#{body}")
       client.close
     end
 
