@@ -21,6 +21,8 @@ module Flare
     DEFAULT_HOST = AIClientsSetup::DEFAULT_HOST
     TIMEOUT_SECONDS = 300 # 5 minutes
     CLIENT_READ_TIMEOUT = 1
+    EXCHANGE_OPEN_TIMEOUT = 10
+    EXCHANGE_READ_TIMEOUT = 30
 
     class AuthorizationDenied < StandardError; end
 
@@ -237,11 +239,16 @@ module Flare
       "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
     end
 
+    # The browser step's code works once, so when this fails, setup has to
+    # start over. Say so, instead of printing a backtrace.
     def exchange_code(auth_code, code_verifier)
       host = ENV.fetch("FLARE_HOST", DEFAULT_HOST)
       uri = URI("#{host}/api/cli/exchange")
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
+      http.open_timeout = EXCHANGE_OPEN_TIMEOUT
+      http.read_timeout = EXCHANGE_READ_TIMEOUT
+      http.write_timeout = EXCHANGE_READ_TIMEOUT
 
       request = Net::HTTP::Post.new(uri.path)
       request["Content-Type"] = "application/x-www-form-urlencoded"
@@ -256,14 +263,24 @@ module Flare
       end
 
       data = JSON.parse(response.body)
-      token = data["token"]
+      token = data["token"] if data.is_a?(Hash)
 
-      if token.nil? || token.empty?
+      if !token.is_a?(String) || token.empty?
         $stderr.puts "No token received from server."
         exit 1
       end
 
       token
+    rescue Timeout::Error
+      exchange_failed("Flare didn't answer in time")
+    rescue JSON::ParserError, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError => e
+      exchange_failed(e.message)
+    end
+
+    def exchange_failed(reason)
+      $stderr.puts "Couldn't finish signing in to Flare: #{reason}"
+      $stderr.puts "Run #{bold("flare setup")} again."
+      exit 1
     end
 
     # --- Token storage ---

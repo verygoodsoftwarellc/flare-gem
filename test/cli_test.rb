@@ -678,3 +678,82 @@ class SetupCommandCallbackTest < Minitest::Test
     socket&.close
   end
 end
+
+class SetupCommandExchangeTest < Minitest::Test
+  def setup
+    @host = ENV["FLARE_HOST"]
+  end
+
+  def teardown
+    @host ? ENV["FLARE_HOST"] = @host : ENV.delete("FLARE_HOST")
+  end
+
+  def test_returns_the_token
+    assert_equal "tok_123", exchange_with_response('{"token":"tok_123"}').first
+  end
+
+  def test_explains_a_refused_connection
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+    server.close
+    ENV["FLARE_HOST"] = "http://127.0.0.1:#{port}"
+
+    assert_exits_with_retry_hint(exchange)
+  end
+
+  def test_explains_a_response_that_is_not_json
+    _, err = exchange_with_response("<html>Bad gateway</html>")
+    assert_exits_with_retry_hint(err)
+  end
+
+  def test_explains_a_malformed_response_header
+    _, err = exchange_with_response('{"token":"tok_123"}', content_length: "abc")
+    assert_exits_with_retry_hint(err)
+  end
+
+  def test_reports_json_without_a_token_object
+    token, err = exchange_with_response("[]")
+    assert_nil token
+    assert_includes err, "No token received"
+  end
+
+  private
+
+  def exchange
+    _, err = capture_io do
+      assert_raises(SystemExit) { Flare::SetupCommand.new(force: false).send(:exchange_code, "code", "verifier") }
+    end
+    err
+  end
+
+  def assert_exits_with_retry_hint(err)
+    assert_includes err, "Couldn't finish signing in to Flare"
+    assert_includes err, "flare setup"
+  end
+
+  # Answers one request with 200 and the body, then returns [token, stderr];
+  # token is nil when setup exited.
+  def exchange_with_response(body, content_length: body.bytesize)
+    server = TCPServer.new("127.0.0.1", 0)
+    ENV["FLARE_HOST"] = "http://127.0.0.1:#{server.addr[1]}"
+    responder = Thread.new do
+      client = server.accept
+      while (line = client.gets) && line != "\r\n"
+        length = line[/\AContent-Length: (\d+)/i, 1]&.to_i || length
+      end
+      client.read(length.to_i)
+      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{content_length}\r\nConnection: close\r\n\r\n#{body}")
+      client.close
+    end
+
+    token = nil
+    _, err = capture_io do
+      token = Flare::SetupCommand.new(force: false).send(:exchange_code, "code", "verifier")
+    rescue SystemExit
+    end
+    [token, err]
+  ensure
+    server&.close
+    responder&.join(5)
+  end
+end
