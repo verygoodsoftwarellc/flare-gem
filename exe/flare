@@ -4,6 +4,10 @@
 $stdout.sync = true
 $stderr.sync = true
 
+# Read the app's files as UTF-8, as Rails does, even in a shell without a
+# UTF-8 locale (LANG unset or LC_ALL=C), where Ruby would read them as ASCII.
+Encoding.default_external = Encoding::UTF_8
+
 require_relative "../lib/flare/cli"
 
 Flare::CLI.start(ARGV)
