@@ -393,15 +393,19 @@ module Flare
       pattern = WRITE_TABLES.fetch(word, READ_TABLE)
       return statement[pattern, 1] if word == "WITH"
 
+      scanner = StringScanner.new(statement)
       first = nil
-      position = 0
-      while (match = pattern.match(statement, position))
-        first ||= match[1]
-        # Masked SQL has no parentheses inside values.
-        before = statement[0, match.begin(0)]
-        return match[1] if before.count("(") <= before.count(")")
+      depth = 0
+      counted = 0
+      while scanner.skip_until(pattern)
+        # Masked SQL has no parentheses inside values. Count only the text
+        # since the last match, so a long statement is read once.
+        between = statement.byteslice(counted, scanner.pos - scanner.matched_size - counted)
+        depth += between.count("(") - between.count(")")
+        return scanner[1] if depth <= 0
 
-        position = match.end(0)
+        first ||= scanner[1]
+        counted = scanner.pos
       end
       first
     end
