@@ -33,6 +33,17 @@ module Flare
 
     ACTIVE_JOB_ERROR_STATUS = /\AUnexpected ActiveJob Error (\S+)\z/
 
+    # Where a statement names the table it writes, by its first word. Every
+    # other statement is named for the table it reads FROM.
+    INTO_TABLE = /\bINTO\s+[`"]?(\w+)[`"]?/i
+    WRITE_TABLES = {
+      "INSERT" => INTO_TABLE,
+      "REPLACE" => INTO_TABLE,
+      "MERGE" => INTO_TABLE,
+      "UPDATE" => /\bUPDATE\s+[`"]?(\w+)[`"]?/i
+    }.freeze
+    READ_TABLE = /\bFROM\s+[`"]?(\w+)[`"]?/i
+
     def initialize(storage:, http_metrics_config: nil, ignore_errors: nil)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
@@ -365,22 +376,42 @@ module Flare
         (operation || SqlMask.operation_word(span.name.to_s.split.last))&.downcase || "query"
       else
         # The first word of a masked statement (SELECT, INSERT, UPDATE, etc.)
-        word = statement ? statement.split(" ", 2).first : SqlMask.command_word(span.attributes["db.statement"])
+        word = statement ? first_word(statement) : SqlMask.command_word(span.attributes["db.statement"])
         (operation || word)&.upcase || "query"
       end
     end
 
+    # The table the statement works on: an INSERT's INTO, an UPDATE's own
+    # table, otherwise the first FROM outside parentheses, so an upsert's
+    # "IS NOT DISTINCT FROM excluded.x" or a subquery in the select list can't
+    # name it. With no FROM outside parentheses (SELECT COUNT(*) FROM
+    # (SELECT ...)), and for a WITH, the first one anywhere counts.
     def extract_sql_table(statement)
       return nil unless statement
 
-      case statement
-      when /\bFROM\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bINTO\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bUPDATE\s+[`"]?(\w+)[`"]?/i
-        $1
+      word = first_word(statement)&.upcase
+      pattern = WRITE_TABLES.fetch(word, READ_TABLE)
+      return statement[pattern, 1] if word == "WITH"
+
+      scanner = StringScanner.new(statement)
+      first = nil
+      depth = 0
+      counted = 0
+      while scanner.skip_until(pattern)
+        # Masked SQL has no parentheses inside values. Count only the text
+        # since the last match, so a long statement is read once.
+        between = statement.byteslice(counted, scanner.pos - scanner.matched_size - counted)
+        depth += between.count("(") - between.count(")")
+        return scanner[1] if depth <= 0
+
+        first ||= scanner[1]
+        counted = scanner.pos
       end
+      first
+    end
+
+    def first_word(statement)
+      statement[/\S+/]
     end
 
     def extract_host_from_url(span)
