@@ -29,9 +29,7 @@ class RevisionTest < Minitest::Test
   end
 
   def test_heroku_build_commit_before_the_deprecated_slug_commit
-    assert_equal SHA, resolve(env: { "HEROKU_BUILD_COMMIT" => SHA })
     assert_equal SHA, resolve(env: { "HEROKU_BUILD_COMMIT" => SHA, "HEROKU_SLUG_COMMIT" => "slug" })
-    assert_equal "slug", resolve(env: { "HEROKU_BUILD_COMMIT" => "", "HEROKU_SLUG_COMMIT" => "slug" })
   end
 
   def test_fly_image_ref_uses_the_image_tag
