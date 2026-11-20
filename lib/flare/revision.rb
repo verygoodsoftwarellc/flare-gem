@@ -18,6 +18,9 @@ module Flare
 
     # Variable => how to read a revision from it (nil: the value as is).
     PLATFORM_VARIABLES = {
+      # Heroku sets HEROKU_BUILD_COMMIT with the runtime-dyno-build-metadata
+      # lab, and the deprecated HEROKU_SLUG_COMMIT with runtime-dyno-metadata.
+      "HEROKU_BUILD_COMMIT" => nil,
       "HEROKU_SLUG_COMMIT" => nil,
       "RENDER_GIT_COMMIT" => nil,
       "RAILWAY_GIT_COMMIT_SHA" => nil,
