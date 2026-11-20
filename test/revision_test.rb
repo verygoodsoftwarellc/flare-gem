@@ -28,6 +28,10 @@ class RevisionTest < Minitest::Test
     assert_equal "render", resolve(env: env)
   end
 
+  def test_heroku_build_commit_before_the_deprecated_slug_commit
+    assert_equal SHA, resolve(env: { "HEROKU_BUILD_COMMIT" => SHA, "HEROKU_SLUG_COMMIT" => "slug" })
+  end
+
   def test_fly_image_ref_uses_the_image_tag
     assert_equal SHA, resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app:#{SHA}" })
     assert_equal "deployment-01JABC", resolve(env: { "FLY_IMAGE_REF" => "registry.fly.io/my-app:deployment-01JABC@sha256:#{"f" * 64}" })
