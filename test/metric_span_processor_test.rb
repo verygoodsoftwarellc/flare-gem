@@ -79,6 +79,27 @@ class MetricSpanProcessorTest < Minitest::Test
     end
   end
 
+  def test_sql_metric_names_the_table_the_statement_works_on
+    {
+      # Active Record's upsert_all on Postgres, with its updated_at condition.
+      %(INSERT INTO "activities" ("id","name","created_at","updated_at") VALUES (1, 'a', '2026-11-20', '2026-11-20') ON CONFLICT ("id") DO UPDATE SET updated_at=(CASE WHEN (("activities"."name" IS NOT DISTINCT FROM excluded."name")) THEN "activities".updated_at ELSE CURRENT_TIMESTAMP END),"name"=excluded."name" RETURNING "id") => ["activities", "INSERT"],
+      "INSERT INTO `activities` (`id`,`name`) VALUES (1, 'a') ON DUPLICATE KEY UPDATE `name`=VALUES(`name`)" => ["activities", "INSERT"],
+      %(INSERT INTO "archived_posts" SELECT * FROM "posts" WHERE id < 5) => ["archived_posts", "INSERT"],
+      %(UPDATE "posts" SET "rank" = (SELECT COUNT(*) FROM "votes" WHERE votes.post_id = posts.id)) => ["posts", "UPDATE"],
+      %(UPDATE "posts" SET "author_name" = "users"."name" FROM "users" WHERE "users"."id" = "posts"."user_id") => ["posts", "UPDATE"],
+      %(SELECT "templates"."id", (SELECT COALESCE(jsonb_object_agg(format.key, format.value), '{}'::jsonb) FROM jsonb_each("templates"."formats") AS format) AS formats FROM "templates" WHERE "templates"."id" = 1) => ["templates", "SELECT"],
+      %(SELECT EXTRACT(YEAR FROM "posts"."created_at") AS year, COUNT(*) FROM "posts" GROUP BY 1) => ["posts", "SELECT"],
+      %(SELECT COUNT(*) FROM (SELECT DISTINCT "posts"."id" FROM "posts" LIMIT 10) subquery_for_count) => ["posts", "SELECT"],
+      %(DELETE FROM "sessions" WHERE "sessions"."id" IN (SELECT "sessions"."id" FROM "sessions" LIMIT 5)) => ["sessions", "DELETE"],
+      %(WITH RECURSIVE tree AS (SELECT "folders".* FROM "folders" WHERE "folders"."id" = 1 UNION ALL SELECT "folders".* FROM "folders" JOIN tree ON "folders"."parent_id" = tree.id) SELECT * FROM tree) => ["folders", "WITH"],
+    }.each do |statement, (target, operation)|
+      @processor.on_end(MockSpan.new(kind: :internal, parent_span_id: "abc", attributes: { "db.system" => "postgresql", "db.name" => "primary", "db.statement" => statement }, start_ns: 0, end_ns: 1_000_000))
+
+      key = @storage.drain.keys.first
+      assert_equal [target, operation], [key.target, key.operation], statement
+    end
+  end
+
   def test_http_metric_paths_drop_segments_with_userinfo
     @http_config.host("api.example.com", :all)
     @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.request.method" => "GET", "http.host" => "api.example.com", "http.target" => "/a/u:hunter2@b/@bob", "http.status_code" => 200 }, start_ns: 0, end_ns: 1_000_000))

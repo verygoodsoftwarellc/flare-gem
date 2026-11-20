@@ -33,6 +33,17 @@ module Flare
 
     ACTIVE_JOB_ERROR_STATUS = /\AUnexpected ActiveJob Error (\S+)\z/
 
+    # Where a statement names the table it writes, by its first word. Every
+    # other statement is named for the table it reads FROM.
+    INTO_TABLE = /\bINTO\s+[`"]?(\w+)[`"]?/i
+    WRITE_TABLES = {
+      "INSERT" => INTO_TABLE,
+      "REPLACE" => INTO_TABLE,
+      "MERGE" => INTO_TABLE,
+      "UPDATE" => /\bUPDATE\s+[`"]?(\w+)[`"]?/i
+    }.freeze
+    READ_TABLE = /\bFROM\s+[`"]?(\w+)[`"]?/i
+
     def initialize(storage:, http_metrics_config: nil, ignore_errors: nil)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
@@ -370,16 +381,41 @@ module Flare
       end
     end
 
+    # The table is the one the statement itself works on: what an INSERT
+    # writes INTO and an UPDATE updates, not a table its subqueries or
+    # upsert conditions read (Rails' upsert_all on Postgres ends with
+    # "IS NOT DISTINCT FROM excluded.x"). Anything else reads FROM, preferring
+    # the FROM outside parentheses, so a subquery or EXTRACT(YEAR FROM x) in
+    # the select list doesn't name it. A FROM that only appears inside
+    # parentheses (SELECT COUNT(*) FROM (SELECT ...)) still counts, and so
+    # does a WITH's first one, the table its CTE reads, not the CTE's name.
     def extract_sql_table(statement)
       return nil unless statement
 
-      case statement
-      when /\bFROM\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bINTO\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bUPDATE\s+[`"]?(\w+)[`"]?/i
-        $1
+      word = statement.split(" ", 2).first.to_s.upcase
+      pattern = WRITE_TABLES.fetch(word, READ_TABLE)
+      table = outside_parentheses(statement)[pattern, 1] unless word == "WITH"
+      table || statement[pattern, 1]
+    end
+
+    # The statement with what's inside parentheses taken out, keeping the
+    # outermost pair, so "FROM (SELECT ...) alias" can't read as a table named
+    # alias. It's masked SQL, so no parenthesis is inside a value. An unclosed
+    # one (a statement cut at MAX_METRIC_STATEMENT_BYTES) leaves the rest out.
+    def outside_parentheses(statement)
+      depth = 0
+      statement.gsub(/[()]|[^()]+/) do |part|
+        if part == "("
+          depth += 1
+          depth == 1 ? part : ""
+        elsif part == ")"
+          next part if depth.zero?
+
+          depth -= 1
+          depth.zero? ? part : ""
+        else
+          depth.zero? ? part : ""
+        end
       end
     end
 
