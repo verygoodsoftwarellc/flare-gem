@@ -376,47 +376,38 @@ module Flare
         (operation || SqlMask.operation_word(span.name.to_s.split.last))&.downcase || "query"
       else
         # The first word of a masked statement (SELECT, INSERT, UPDATE, etc.)
-        word = statement ? statement.split(" ", 2).first : SqlMask.command_word(span.attributes["db.statement"])
+        word = statement ? first_word(statement) : SqlMask.command_word(span.attributes["db.statement"])
         (operation || word)&.upcase || "query"
       end
     end
 
-    # The table is the one the statement itself works on: what an INSERT
-    # writes INTO and an UPDATE updates, not a table its subqueries or
-    # upsert conditions read (Rails' upsert_all on Postgres ends with
-    # "IS NOT DISTINCT FROM excluded.x"). Anything else reads FROM, preferring
-    # the FROM outside parentheses, so a subquery or EXTRACT(YEAR FROM x) in
-    # the select list doesn't name it. A FROM that only appears inside
-    # parentheses (SELECT COUNT(*) FROM (SELECT ...)) still counts, and so
-    # does a WITH's first one, the table its CTE reads, not the CTE's name.
+    # The table the statement works on: an INSERT's INTO, an UPDATE's own
+    # table, otherwise the first FROM outside parentheses, so an upsert's
+    # "IS NOT DISTINCT FROM excluded.x" or a subquery in the select list can't
+    # name it. With no FROM outside parentheses (SELECT COUNT(*) FROM
+    # (SELECT ...)), and for a WITH, the first one anywhere counts.
     def extract_sql_table(statement)
       return nil unless statement
 
-      word = statement.split(" ", 2).first.to_s.upcase
+      word = first_word(statement)&.upcase
       pattern = WRITE_TABLES.fetch(word, READ_TABLE)
-      table = outside_parentheses(statement)[pattern, 1] unless word == "WITH"
-      table || statement[pattern, 1]
+      return statement[pattern, 1] if word == "WITH"
+
+      first = nil
+      position = 0
+      while (match = pattern.match(statement, position))
+        first ||= match[1]
+        # Masked SQL has no parentheses inside values.
+        before = statement[0, match.begin(0)]
+        return match[1] if before.count("(") <= before.count(")")
+
+        position = match.end(0)
+      end
+      first
     end
 
-    # The statement with what's inside parentheses taken out, keeping the
-    # outermost pair, so "FROM (SELECT ...) alias" can't read as a table named
-    # alias. It's masked SQL, so no parenthesis is inside a value. An unclosed
-    # one (a statement cut at MAX_METRIC_STATEMENT_BYTES) leaves the rest out.
-    def outside_parentheses(statement)
-      depth = 0
-      statement.gsub(/[()]|[^()]+/) do |part|
-        if part == "("
-          depth += 1
-          depth == 1 ? part : ""
-        elsif part == ")"
-          next part if depth.zero?
-
-          depth -= 1
-          depth.zero? ? part : ""
-        else
-          depth.zero? ? part : ""
-        end
-      end
+    def first_word(statement)
+      statement[/\S+/]
     end
 
     def extract_host_from_url(span)
