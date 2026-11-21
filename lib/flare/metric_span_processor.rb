@@ -19,7 +19,8 @@ module Flare
     CLIENT = :client
     CONSUMER = :consumer
 
-    # Cache store class name patterns mapped to short service names
+    # Cache store class name patterns (matched against the downcased class
+    # name, so SolidCache::Store is "solidcache") mapped to short service names
     CACHE_STORE_MAP = {
       "redis" => "redis",
       "mem_cache" => "memcache",
@@ -28,7 +29,7 @@ module Flare
       "file" => "file",
       "memory" => "memory",
       "null" => "null",
-      "solid_cache" => "solid_cache"
+      "solidcache" => "solid_cache"
     }.freeze
 
     ACTIVE_JOB_ERROR_STATUS = /\AUnexpected ActiveJob Error (\S+)\z/
@@ -495,11 +496,12 @@ module Flare
         return name if downcased.include?(pattern)
       end
 
-      # Fallback: last segment, strip Store/Cache suffixes
-      short = store.split("::").last
-                   .gsub(/CacheStore$|Store$|Cache$/, "")
-                   .downcase
-      short.empty? ? "unknown" : short
+      # Fallback: the last segment without its Store/Cache suffix, or the
+      # namespace when that leaves nothing (Acme::Store is "acme")
+      short = store.split("::").reverse_each
+                   .map { |segment| segment.gsub(/CacheStore$|Store$|Cache$/, "").downcase }
+                   .find { |segment| !segment.empty? }
+      short || "unknown"
     end
 
     def extract_cache_operation(span)

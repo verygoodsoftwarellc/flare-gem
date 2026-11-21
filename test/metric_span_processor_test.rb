@@ -796,6 +796,46 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "custom", key.service
   end
 
+  # Rails 8's default production cache store.
+  def test_cache_solid_cache_store
+    span = MockSpan.new(
+      kind: :internal,
+      parent_span_id: "abc123",
+      name: "cache_read.active_support",
+      attributes: {
+        "key" => "test:key",
+        "hit" => true,
+        "store" => "SolidCache::Store"
+      },
+      start_ns: 0,
+      end_ns: 1_000_000
+    )
+
+    @processor.on_end(span)
+
+    key = @storage.drain.keys.first
+    assert_equal "solid_cache", key.service
+  end
+
+  def test_cache_store_named_only_store_uses_its_namespace
+    span = MockSpan.new(
+      kind: :internal,
+      parent_span_id: "abc123",
+      name: "cache_write.active_support",
+      attributes: {
+        "key" => "test:key",
+        "store" => "Acme::Store"
+      },
+      start_ns: 0,
+      end_ns: 1_000_000
+    )
+
+    @processor.on_end(span)
+
+    key = @storage.drain.keys.first
+    assert_equal "acme", key.service
+  end
+
   def test_cache_missing_store_uses_unknown
     span = MockSpan.new(
       kind: :internal,
