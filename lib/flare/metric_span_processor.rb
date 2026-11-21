@@ -19,15 +19,18 @@ module Flare
     CLIENT = :client
     CONSUMER = :consumer
 
-    # Cache store class name patterns (matched against the downcased class
-    # name, so SolidCache::Store is "solidcache") mapped to short service names
+    # Cache store name patterns mapped to short service names. Patterns are
+    # matched against the downcased store name, which is usually a class name
+    # with no underscores (SolidCache::Store is "solidcache::store").
     CACHE_STORE_MAP = {
       "redis" => "redis",
+      "mem_cache" => "memcache",
       "memcache" => "memcache",
       "dalli" => "memcache",
       "file" => "file",
       "memory" => "memory",
       "null" => "null",
+      "solid_cache" => "solid_cache",
       "solidcache" => "solid_cache"
     }.freeze
 
