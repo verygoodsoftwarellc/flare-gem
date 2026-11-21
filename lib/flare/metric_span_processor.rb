@@ -23,7 +23,6 @@ module Flare
     # name, so SolidCache::Store is "solidcache") mapped to short service names
     CACHE_STORE_MAP = {
       "redis" => "redis",
-      "mem_cache" => "memcache",
       "memcache" => "memcache",
       "dalli" => "memcache",
       "file" => "file",
@@ -496,12 +495,11 @@ module Flare
         return name if downcased.include?(pattern)
       end
 
-      # Fallback: the last segment without its Store/Cache suffix, or the
-      # namespace when that leaves nothing (Acme::Store is "acme")
-      short = store.split("::").reverse_each
-                   .map { |segment| segment.gsub(/CacheStore$|Store$|Cache$/, "").downcase }
-                   .find { |segment| !segment.empty? }
-      short || "unknown"
+      # Fallback: last segment, strip Store/Cache suffixes
+      short = store.split("::").last
+                   .gsub(/CacheStore$|Store$|Cache$/, "")
+                   .downcase
+      short.empty? ? "unknown" : short
     end
 
     def extract_cache_operation(span)
