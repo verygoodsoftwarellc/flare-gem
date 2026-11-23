@@ -94,6 +94,17 @@ class RuleManagerTest < Minitest::Test
     assert_equal '"e1"', second[:headers]["If-None-Match"]
   end
 
+  def test_failed_rules_response_preserves_the_last_applied_etag
+    @transport.queue(ok({ "trace_rules" => [] }, etag: '"old"'))
+    @manager.poll_now
+
+    @transport.queue(Flare::HttpTransport::Response.new(code: "200", body: "{", headers: { "ETag" => '"new"' }))
+    @manager.poll_now
+
+    assert_equal 1, @manager.last_error_count.value
+    assert_equal '"old"', @manager.etag
+  end
+
   def test_poll_sends_client_identifying_headers
     @transport.queue(ok({ "trace_rules" => [] }))
     @manager.poll_now
