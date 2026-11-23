@@ -106,8 +106,8 @@ module Flare
       when "304"
         @marker.sweep
       when "200"
-        @etag = response.header("ETag")
         apply(JSON.parse(response.body))
+        @etag = response.header("ETag")
         @marker.sweep
       when "401", "403"
         @stopped_due_to_auth = true

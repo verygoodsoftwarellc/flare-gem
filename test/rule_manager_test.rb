@@ -94,6 +94,23 @@ class RuleManagerTest < Minitest::Test
     assert_equal '"e1"', second[:headers]["If-None-Match"]
   end
 
+  def test_failed_rules_responses_retry_with_the_last_applied_etag
+    @transport.queue(ok({ "trace_rules" => [] }, etag: '"first"'))
+    @transport.queue(Flare::HttpTransport::Response.new(code: "200", body: "{", headers: { "ETag" => '"bad-json"' }))
+    @transport.queue(ok({ "trace_rules" => true }, etag: '"bad-rules"'))
+    @transport.queue(ok({
+      "trace_rules" => [],
+      "slo_rules" => [{ "namespace" => "web", "threshold_ms" => 250 }]
+    }, etag: '"second"'))
+
+    4.times { @manager.poll_now }
+
+    assert_equal [nil, '"first"', '"first"', '"first"'], @transport.calls.map { |call| call[:headers]["If-None-Match"] }
+    assert_equal 2, @manager.last_error_count.value
+    assert_equal 250, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
+    assert_equal '"second"', @manager.etag
+  end
+
   def test_poll_sends_client_identifying_headers
     @transport.queue(ok({ "trace_rules" => [] }))
     @manager.poll_now
