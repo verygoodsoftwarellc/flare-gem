@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "json"
 require "flare/slo_manager"
 
 class SloManagerTest < Minitest::Test
@@ -70,6 +71,14 @@ class SloManagerTest < Minitest::Test
     # The partial and threshold-less rules were dropped, so these fall back to the default.
     assert_equal 1000, @manager.threshold_for(namespace: "web", service: "rails", target: "Other#index")
     assert_equal 1000, @manager.threshold_for(namespace: "web", service: "rails", target: "NoThreshold#x")
+  end
+
+  def test_non_finite_thresholds_dropped_without_losing_other_rules
+    rules = JSON.parse('[{"namespace": "web", "threshold_ms": 1e400}, {"namespace": "job", "threshold_ms": 200}]')
+    @manager.update(rules + [{ "namespace" => "web", "service" => "rails", "target" => "X#y", "threshold_ms" => Float::NAN }])
+
+    assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
+    assert_equal 200, @manager.threshold_for(namespace: "job", service: "sidekiq", target: "MyJob")
   end
 
   def test_non_positive_thresholds_dropped

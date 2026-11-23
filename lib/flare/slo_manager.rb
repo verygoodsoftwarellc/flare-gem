@@ -93,6 +93,9 @@ module Flare
 
     def coerce_threshold(value)
       return nil if value.nil?
+      # Infinity and NaN (JSON 1e400 parses as Infinity) would raise in to_i
+      # and abort the whole update, so they are dropped like any bad rule.
+      return nil if value.is_a?(Float) && !value.finite?
       return nil unless value.is_a?(Numeric) || value.to_s.match?(/\A\d+\z/)
 
       ms = value.to_i
