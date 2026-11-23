@@ -41,11 +41,17 @@ class TraceFilterTest < Minitest::Test
     assert_nil Flare::TraceFilter.build("url.path")
   end
 
+  def test_null_negate_means_false
+    filter = Flare::TraceFilter.build({ "field" => "url.path", "op" => "prefix", "value" => "/a", "negate" => nil })
+
+    assert filter.match?(web(path: "/a/b"))
+  end
+
   def test_symbol_keys_build_too
     filter = Flare::TraceFilter.build({ field: "url.path", op: "prefix", value: "/a", negate: true })
 
-    assert filter.negate?
     refute filter.match?(web(path: "/a/b"))
+    assert filter.match?(web(path: "/b"))
   end
 
   # ----- http.method -------------------------------------------------------

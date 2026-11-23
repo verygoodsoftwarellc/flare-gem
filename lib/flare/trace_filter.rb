@@ -32,7 +32,8 @@ module Flare
       op = read(raw, "op")
       return nil unless OPS.fetch(field, []).include?(op)
 
-      negate = raw_key?(raw, "negate") ? read(raw, "negate") : false
+      negate = read(raw, "negate")
+      negate = false if negate.nil?
       return nil unless [true, false].include?(negate)
 
       value = normalize_value(field, op, read(raw, "value"))
@@ -81,13 +82,7 @@ module Flare
       raw.key?(key) ? raw[key] : raw[key.to_sym]
     end
 
-    def self.raw_key?(raw, key)
-      raw.key?(key) || raw.key?(key.to_sym)
-    end
-
-    private_class_method :normalize_value, :text?, :bound?, :read, :raw_key?
-
-    attr_reader :field, :op, :value, :name
+    private_class_method :normalize_value, :text?, :bound?, :read
 
     def initialize(field:, op:, value:, name: nil, negate: false)
       @field = field
@@ -96,10 +91,6 @@ module Flare
       @name = name
       @negate = negate
       freeze
-    end
-
-    def negate?
-      @negate
     end
 
     def match?(span)
