@@ -110,7 +110,7 @@ module Flare
       when "url.path"
         path_match?(request_path(attributes))
       when "url.query_param"
-        query_param_match?(query_params(attributes))
+        query_param_match?(raw_query(attributes))
       when "http.status_code"
         status = attributes["http.status_code"] || attributes["http.response.status_code"]
         !status.nil? && within?(status.to_i)
@@ -130,10 +130,23 @@ module Flare
       end
     end
 
-    def query_param_match?(params)
-      return params.key?(@name) if @op == "present"
+    # Walks the query's &-separated pairs (Rack 3's separator) looking only
+    # for @name, decoding each pair on its own so one malformed parameter
+    # (bad percent-encoding) can't hide the others; an undecodable key or
+    # value is compared as written. A bare key (?preview) is present with no
+    # value, so it never equals "" the way ?preview= does.
+    def query_param_match?(query)
+      return false if query.nil? || query.empty?
 
-      Array(params[@name]).include?(@value)
+      query.split("&").each do |pair|
+        next if pair.empty?
+
+        key, value = pair.split("=", 2)
+        next unless unescape(key) == @name
+        return true if @op == "present"
+        return true if !value.nil? && unescape(value) == @value
+      end
+      false
     end
 
     def request_path(attributes)
@@ -144,23 +157,11 @@ module Flare
       target&.to_s&.split("?", 2)&.first
     end
 
-    def query_params(attributes)
+    def raw_query(attributes)
       query = attributes["url.query"]
-      if query.nil?
-        target = attributes["http.target"]
-        query = target&.to_s&.split("?", 2)&.[](1)
-      end
-      return {} if query.nil? || query.empty?
+      return query.to_s unless query.nil?
 
-      # Pair by pair, so one malformed parameter (bad percent-encoding) can't
-      # hide the others; an undecodable key or value is compared as written.
-      query.split(/[&;]/).each_with_object({}) do |pair, params|
-        key, value = pair.split("=", 2)
-        key = unescape(key)
-        next if key.empty?
-
-        (params[key] ||= []) << unescape(value.to_s)
-      end
+      attributes["http.target"]&.to_s&.split("?", 2)&.[](1)
     end
 
     def unescape(text)

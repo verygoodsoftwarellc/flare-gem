@@ -99,7 +99,7 @@ module Flare
       rule_id = span.attributes&.[](Sampler::RULE_ID_ATTRIBUTE)
       return unless @sampler.judged_rule(rule_id)
 
-      @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule_id)
+      @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule_id, judged: true)
     rescue StandardError => e
       callback_failed("on_start", e)
     end
@@ -201,9 +201,10 @@ module Flare
 
     # Judged traces are always marked: by WebMarkerSubscriber, or by
     # on_start for a sampled root. Returns the rule when it judges its
-    # requests, EXPIRED_RULE when the server stopped sending the rule while
-    # the request ran (its filters and mode are gone, so the request can't be
-    # judged and is dropped), else nil.
+    # requests, EXPIRED_RULE when a judged rule stopped arriving from the
+    # server while the request ran (its filters and mode are gone, so the
+    # request can't be judged and is dropped), else nil. A plain
+    # all_requests rule that expires keeps the request it already selected.
     def judged_rule(trace_id, marked)
       return nil if !marked || @sampler.nil? || @slo_check.nil?
 
@@ -211,7 +212,9 @@ module Flare
       return nil if rule_id.nil?
 
       rule = @sampler.rules.find { |candidate| candidate.id == rule_id }
-      return EXPIRED_RULE if rule.nil?
+      if rule.nil?
+        return @marker.judged?(trace_id) ? EXPIRED_RULE : nil
+      end
 
       rule.judged? ? rule : nil
     end

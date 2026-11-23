@@ -120,6 +120,22 @@ class TraceFilterTest < Minitest::Test
     assert build_query("equals", "page", "2").match?(web(attributes: { "http.target" => "/passages?page=2" }))
   end
 
+  def test_empty_pairs_are_skipped
+    assert build_query("present", "sort").match?(web(query: "page=2&&sort"))
+    assert build_query("equals", "page", "2").match?(web(query: "&page=2&"))
+  end
+
+  def test_semicolon_is_not_a_separator
+    refute build_query("present", "page").match?(web(query: "a=1;page=2"))
+    assert build_query("equals", "a", "1;page=2").match?(web(query: "a=1;page=2"))
+  end
+
+  def test_bare_key_is_present_but_has_no_value
+    assert build_query("present", "preview").match?(web(query: "preview"))
+    refute build_query("equals", "preview", "").match?(web(query: "preview"))
+    assert build_query("equals", "preview", "").match?(web(query: "preview="))
+  end
+
   def test_param_with_a_malformed_value_is_still_present
     assert build_query("present", "page").match?(web(query: "page=%E0%A4%A"))
     refute build_query("equals", "page", "2").match?(web(query: "page=%E0%A4%A"))

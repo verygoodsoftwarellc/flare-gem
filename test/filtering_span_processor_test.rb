@@ -208,7 +208,7 @@ end
   # must not let that request upload unjudged (its filters never ran).
   def test_trace_whose_rule_expired_mid_request_is_dropped
     processor = failures_only_processor(verdict: "slow", filters: [{ "field" => "url.path", "op" => "prefix", "value" => "/kept" }])
-    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7, judged: true)
     processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
 
     @sampler.update_rules([])
@@ -222,6 +222,20 @@ end
     assert_empty @exporter.exports.flatten
     assert_equal 0, processor.buffer_size
     refute @marker.marked?("t1")
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_all_requests_trace_whose_rule_expired_mid_request_is_still_kept
+    processor = failures_only_processor(verdict: nil, capture: "all_requests")
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+
+    @sampler.update_rules([])
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    processor.force_flush
+
+    assert_equal %w[child rack], @exporter.exports.flatten.map(&:span_id).sort
   ensure
     processor&.shutdown(timeout: 1)
   end
