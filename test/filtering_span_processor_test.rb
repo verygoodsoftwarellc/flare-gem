@@ -204,6 +204,28 @@ def test_shutdown_drops_a_failures_only_trace_still_awaiting_its_verdict
   assert_equal 0, processor.buffer_size
 end
 
+  # Codex review: a judged rule that expires while its request is in flight
+  # must not let that request upload unjudged (its filters never ran).
+  def test_trace_whose_rule_expired_mid_request_is_dropped
+    processor = failures_only_processor(verdict: "slow", filters: [{ "field" => "url.path", "op" => "prefix", "value" => "/kept" }])
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+
+    @sampler.update_rules([])
+    processor.force_flush
+    assert_empty @exporter.exports.flatten, "flush holds it: the verdict is still pending"
+
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server,
+                             attributes: { "url.path" => "/excluded" }))
+    processor.force_flush
+
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+    refute @marker.marked?("t1")
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_failures_only_sampled_trace_is_judged_at_its_root
     processor = failures_only_processor(verdict: "error")
     root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
@@ -639,7 +661,7 @@ end
   end
 
   def failures_only_processor(verdict:, capture: "slo_failures", baseline: false, filters: [])
-    sampler = Flare::Sampler.new
+    sampler = @sampler = Flare::Sampler.new
     sampler.update_rules([{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" },
                             "rate" => 1.0, "capture" => capture, "baseline" => baseline, "filters" => filters }])
     assert_equal 1, sampler.rules.length, "the test rule must validate"

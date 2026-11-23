@@ -42,6 +42,9 @@ module Flare
     # upload URLs on passing requests meanwhile.
     BASELINES_PER_RULE = 2
 
+    # judged_rule's answer for a marked trace whose rule the server no longer sends.
+    EXPIRED_RULE = :expired
+
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
     # sampler and slo_check enable judged rules: sampler says which rules
@@ -118,6 +121,7 @@ module Flare
       if rule
         # Only the owner ends the request; a nested job or server span is part of it.
         return enqueue(span_data, complete: false) unless owner_finished
+        return discard_trace(ctx.trace_id) if rule == EXPIRED_RULE
 
         reason = verdict(rule, span_data)
         return discard_trace(ctx.trace_id) unless reason
@@ -196,11 +200,20 @@ module Flare
     end
 
     # Judged traces are always marked: by WebMarkerSubscriber, or by
-    # on_start for a sampled root.
+    # on_start for a sampled root. Returns the rule when it judges its
+    # requests, EXPIRED_RULE when the server stopped sending the rule while
+    # the request ran (its filters and mode are gone, so the request can't be
+    # judged and is dropped), else nil.
     def judged_rule(trace_id, marked)
       return nil if !marked || @sampler.nil? || @slo_check.nil?
 
-      @sampler.judged_rule(@marker.rule_id(trace_id))
+      rule_id = @marker.rule_id(trace_id)
+      return nil if rule_id.nil?
+
+      rule = @sampler.rules.find { |candidate| candidate.id == rule_id }
+      return EXPIRED_RULE if rule.nil?
+
+      rule.judged? ? rule : nil
     end
 
     # A kept trace waiting on its grace period already has its verdict; it

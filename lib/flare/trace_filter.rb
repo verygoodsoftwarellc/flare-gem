@@ -152,10 +152,21 @@ module Flare
       end
       return {} if query.nil? || query.empty?
 
-      Rack::Utils.parse_query(query)
-    rescue StandardError
-      # A malformed query string (bad percent-encoding) has no params to match.
-      {}
+      # Pair by pair, so one malformed parameter (bad percent-encoding) can't
+      # hide the others; an undecodable key or value is compared as written.
+      query.split(/[&;]/).each_with_object({}) do |pair, params|
+        key, value = pair.split("=", 2)
+        key = unescape(key)
+        next if key.empty?
+
+        (params[key] ||= []) << unescape(value.to_s)
+      end
+    end
+
+    def unescape(text)
+      Rack::Utils.unescape(text)
+    rescue ArgumentError
+      text
     end
 
     def within?(number)

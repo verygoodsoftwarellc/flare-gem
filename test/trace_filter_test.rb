@@ -47,6 +47,17 @@ class TraceFilterTest < Minitest::Test
     assert filter.match?(web(path: "/a/b"))
   end
 
+  # Codex review: one malformed parameter made the whole query parse as empty,
+  # so a negated "present" filter matched a request that had the parameter.
+  def test_malformed_param_does_not_hide_the_others
+    absent = build_query("present", "preview", negate: true)
+    equals = build_query("equals", "preview", "1")
+
+    refute absent.match?(web(query: "bad=%ZZ&preview=1"))
+    assert equals.match?(web(query: "bad=%ZZ&preview=1"))
+    assert absent.match?(web(query: "bad=%ZZ"))
+  end
+
   def test_symbol_keys_build_too
     filter = Flare::TraceFilter.build({ field: "url.path", op: "prefix", value: "/a", negate: true })
 
@@ -109,8 +120,9 @@ class TraceFilterTest < Minitest::Test
     assert build_query("equals", "page", "2").match?(web(attributes: { "http.target" => "/passages?page=2" }))
   end
 
-  def test_malformed_query_string_has_no_params
-    refute build_query("present", "page").match?(web(query: "page=%E0%A4%A"))
+  def test_param_with_a_malformed_value_is_still_present
+    assert build_query("present", "page").match?(web(query: "page=%E0%A4%A"))
+    refute build_query("equals", "page", "2").match?(web(query: "page=%E0%A4%A"))
   end
 
   # ----- http.status_code --------------------------------------------------
