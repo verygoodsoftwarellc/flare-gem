@@ -2,6 +2,7 @@
 
 require "active_support/inflector/methods"
 require_relative "metric_key"
+require_relative "slo_manager"
 require_relative "http_metrics_config"
 require_relative "sql_mask"
 require_relative "store_statement"
@@ -47,10 +48,11 @@ module Flare
     }.freeze
     READ_TABLE = /\bFROM\s+[`"]?(\w+)[`"]?/i
 
-    def initialize(storage:, http_metrics_config: nil, ignore_errors: nil)
+    def initialize(storage:, http_metrics_config: nil, ignore_errors: nil, slo_manager: nil)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
       @ignore_errors = ignore_errors || []
+      @slo_manager = slo_manager || SloManager.new
       @pid = $$
     end
 
@@ -172,11 +174,7 @@ module Flare
         operation: http_status_class(span)
       )
 
-      @storage.increment(
-        key,
-        duration_ms: duration_ms(span),
-        error: http_error?(span)
-      )
+      increment_with_slo(key, duration_ms: duration_ms(span), error: http_error?(span))
     end
 
     def record_background_metric(span)
@@ -190,11 +188,15 @@ module Flare
         operation: transaction_name ? "perform" : (span.attributes["code.function"] || span.name)
       )
 
-      @storage.increment(
-        key,
-        duration_ms: duration_ms(span),
-        error: span_error?(span)
-      )
+      increment_with_slo(key, duration_ms: duration_ms(span), error: span_error?(span))
+    end
+
+    # Web and job entry points also count toward the latency SLO: slow means
+    # over the operation's threshold without erroring.
+    def increment_with_slo(key, duration_ms:, error:)
+      slow = @slo_manager.slow?(namespace: key.namespace, service: key.service, target: key.target,
+                                duration_ms: duration_ms, error: error)
+      @storage.increment(key, duration_ms: duration_ms, error: error, slow: slow)
     end
 
     def record_db_metric(span)

@@ -30,10 +30,11 @@ module Flare
     attr_reader :poll_count, :etag, :stopped_due_to_auth, :last_error_count
 
     def initialize(sampler:, marker:, pool:, base_url:, api_key:, project:, environment:,
-                   interval: DEFAULT_INTERVAL, transport: nil, logger: nil)
+                   slo_manager: nil, interval: DEFAULT_INTERVAL, transport: nil, logger: nil)
       @sampler     = sampler
       @marker      = marker
       @pool        = pool
+      @slo_manager = slo_manager
       @rules_url   = "#{base_url.to_s.chomp('/')}/api/rules"
       @api_key     = api_key
       @project     = project
@@ -129,13 +130,18 @@ module Flare
     end
 
     # Server payload shape (see tirana-v2 Api::RulesController):
-    #   { "trace_rules": [{ "id", "match_attributes", "rate", ..., "urls": [...] }] }
+    #   { "trace_rules": [{ "id", "match_attributes", "rate", ..., "urls": [...] }],
+    #     "slo_rules": [{ "namespace", "service"?, "target"?, "threshold_ms" }] }
+    # The `slo_rules` key is optional; the rules poll is authoritative, so an
+    # absent array clears any prior SLO config (update treats nil as empty).
     def apply(payload)
       rules = payload["trace_rules"] || []
       @sampler.update_rules(rules)
 
       url_entries = rules.flat_map { |r| Array(r["urls"]) }
       @pool.replace(url_entries)
+
+      @slo_manager&.update(payload["slo_rules"])
     end
   end
 end

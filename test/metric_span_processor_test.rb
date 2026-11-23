@@ -3,6 +3,7 @@
 require_relative "test_helper"
 require "flare/metric_storage"
 require "flare/metric_span_processor"
+require "flare/slo_manager"
 
 unless defined?(GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError)
   module GoodJob
@@ -1266,17 +1267,122 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET *", key.target
   end
 
+  # SLO slow_count tests
+
+  def test_web_over_threshold_counts_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+    assert_equal 0, counter[:error_count]
+  end
+
+  def test_web_under_threshold_not_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 50_000_000)) # 50ms < 100
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_errored_and_slow_counts_error_only
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    # 500 (error) AND over threshold -> disjoint: error only, not slow.
+    processor.on_end(web_span(status: 500, start_ns: 0, end_ns: 150_000_000))
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:error_count]
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_untracked_when_no_threshold
+    slo = Flare::SloManager.new # empty -> no threshold
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 5_000_000_000)) # very slow
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_no_slo_manager_never_slow
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 5_000_000_000))
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_per_op_override_applies
+    slo = Flare::SloManager.new
+    slo.update([
+      { "namespace" => "web", "threshold_ms" => 1000 },
+      { "namespace" => "web", "service" => "rails", "target" => "UsersController#show", "threshold_ms" => 100 }
+    ])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100 override
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+  end
+
+  def test_background_over_threshold_counts_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "job", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    span = MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      name: "MyJob process",
+      attributes: { "code.namespace" => "MyJob", "code.function" => "perform", "messaging.system" => "sidekiq" },
+      start_ns: 0,
+      end_ns: 200_000_000 # 200ms > 100
+    )
+
+    processor.on_end(span)
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+  end
+
+  def web_span(status:, start_ns:, end_ns:)
+    MockSpan.new(
+      kind: :server,
+      parent_span_id: nil,
+      attributes: {
+        "http.status_code" => status,
+        "code.namespace" => "UsersController",
+        "code.function" => "show"
+      },
+      start_ns: start_ns,
+      end_ns: end_ns
+    )
+  end
+
   def test_default_ignores_good_job_concurrency_errors_and_subclasses
     @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
     @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
 
-    assert_equal({ count: 2, sum_ms: 100, error_count: 0 }, @storage.drain.values.first)
+    assert_equal({ count: 2, sum_ms: 100, error_count: 0, slow_count: 0 }, @storage.drain.values.first)
   end
 
   def test_exception_not_ignored_still_counts_as_error
     @processor.on_end(failed_job_span("RuntimeError"))
 
-    assert_equal({ count: 1, sum_ms: 50, error_count: 1 }, @storage.drain.values.first)
+    assert_equal({ count: 1, sum_ms: 50, error_count: 1, slow_count: 0 }, @storage.drain.values.first)
   end
 
   def test_error_status_without_exception_event_still_counts_as_error
@@ -1293,7 +1399,7 @@ class MetricSpanProcessorTest < Minitest::Test
     span.events.clear
     @processor.on_end(span)
 
-    assert_equal({ count: 1, sum_ms: 50, error_count: 0 }, @storage.drain.values.first)
+    assert_equal({ count: 1, sum_ms: 50, error_count: 0, slow_count: 0 }, @storage.drain.values.first)
   end
 
   def test_custom_ignore_errors_match_the_class_and_its_subclasses
@@ -1304,7 +1410,7 @@ class MetricSpanProcessorTest < Minitest::Test
     processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
     processor.on_end(failed_job_span("ArgumentError"))
 
-    assert_equal({ count: 4, sum_ms: 200, error_count: 1 }, @storage.drain.values.first)
+    assert_equal({ count: 4, sum_ms: 200, error_count: 1, slow_count: 0 }, @storage.drain.values.first)
   end
 
   def test_ignore_errors_match_unloadable_classes_by_exact_name
