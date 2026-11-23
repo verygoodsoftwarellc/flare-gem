@@ -192,6 +192,11 @@ module Flare
       @sampler.capture_slo_failures?(@marker.rule_id(trace_id))
     end
 
+    # A failure-delayed trace already has its verdict; it waits only for late spans.
+    def awaiting_verdict?(trace_id)
+      !@delayed_ready_by_trace.key?(trace_id) && slo_failures_only?(trace_id, @marker.marked?(trace_id))
+    end
+
     # The request passed its SLO: drop what was buffered for it and stop
     # following the trace, so spans that finish later are dropped too.
     def discard_trace(trace_id)
@@ -297,10 +302,13 @@ module Flare
       return unless lock_before_deadline(deadline)
 
       begin
-        @ready_queue.concat(@pending_by_trace.values.flatten)
-        @pending_by_trace.clear
-        @trace_order.clear
-        @pending_count = 0
+        # A failures-only request still in flight has no verdict yet, so its
+        # spans stay buffered; everything else goes out now.
+        held = @pending_by_trace.select { |trace_id, _| awaiting_verdict?(trace_id) }
+        @pending_by_trace.each { |trace_id, spans| @ready_queue.concat(spans) unless held.key?(trace_id) }
+        @pending_by_trace.replace(held)
+        @trace_order.select! { |trace_id| held.key?(trace_id) }
+        @pending_count = held.each_value.sum(&:length)
         unmark_delayed_traces
         @delayed_ready_by_trace.clear
         batch = @ready_queue

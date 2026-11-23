@@ -173,6 +173,24 @@ ensure
   processor&.shutdown(timeout: 1)
 end
 
+def test_flush_keeps_an_in_flight_failures_only_trace_until_its_verdict
+  processor = failures_only_processor(verdict: nil)
+  @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+  processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+  processor.force_flush
+  assert_empty @exporter.exports.flatten, "no verdict yet, so nothing is uploaded"
+  assert_equal 1, processor.buffer_size
+
+  processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+  processor.force_flush
+
+  assert_empty @exporter.exports.flatten
+  assert_equal 0, processor.buffer_size
+ensure
+  processor&.shutdown(timeout: 1)
+end
+
   def test_failures_only_sampled_trace_is_judged_at_its_root
     processor = failures_only_processor(verdict: "error")
     root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
