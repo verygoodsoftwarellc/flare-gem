@@ -66,10 +66,8 @@ module Flare
 
       detect_forking
 
-      if web_request?(span)
-        record_web_metric(span)
-      elsif background_job?(span)
-        record_background_metric(span)
+      if web_request?(span) || background_job?(span)
+        record_entry_point_metric(span)
       elsif database_span?(span)
         record_db_metric(span)
       elsif http_client_span?(span)
@@ -87,6 +85,19 @@ module Flare
 
       @on_finish_error_warned_pid = $$
       warn "[Flare::MetricSpanProcessor] on_finish failed: #{e.class}: #{e.message}"
+    end
+
+    # "error" or "slow" when a web request or job fails its operation's
+    # latency SLO, nil otherwise (including spans that are neither). It uses
+    # the same keys, thresholds and error rules as error_count and
+    # slow_count, so FilteringSpanProcessor keeps exactly the requests a
+    # failures-only trace rule's SLO counts as failing.
+    def slo_failure(span)
+      key, error = entry_point(span)
+      return nil unless key
+      return "error" if error
+
+      "slow" if slow?(key, duration_ms(span), error)
     end
 
     def force_flush(timeout: nil)
@@ -153,7 +164,28 @@ module Flare
         span.parent_span_id == OpenTelemetry::Trace::INVALID_SPAN_ID
     end
 
-    def record_web_metric(span)
+    # Web and job entry points also count toward the latency SLO: slow means
+    # over the operation's threshold without erroring.
+    def record_entry_point_metric(span)
+      key, error = entry_point(span)
+      return unless key
+
+      duration = duration_ms(span)
+      @storage.increment(key, duration_ms: duration, error: error, slow: slow?(key, duration, error))
+    end
+
+    # [metric key, error?] for a web request or job span, nil for anything
+    # else and for requests that never reached a controller.
+    def entry_point(span)
+      if web_request?(span)
+        key = web_key(span)
+        [key, http_error?(span)] if key
+      elsif background_job?(span)
+        [job_key(span), span_error?(span)]
+      end
+    end
+
+    def web_key(span)
       target = span.attributes[Flare::TRANSACTION_NAME_ATTRIBUTE]
 
       unless target
@@ -166,37 +198,30 @@ module Flare
         target = action ? "#{controller}##{action}" : controller
       end
 
-      key = MetricKey.new(
+      MetricKey.new(
         bucket: bucket_time(span),
         namespace: "web",
         service: "rails",
         target: target,
         operation: http_status_class(span)
       )
-
-      increment_with_slo(key, duration_ms: duration_ms(span), error: http_error?(span))
     end
 
-    def record_background_metric(span)
+    def job_key(span)
       transaction_name = span.attributes[Flare::TRANSACTION_NAME_ATTRIBUTE]
 
-      key = MetricKey.new(
+      MetricKey.new(
         bucket: bucket_time(span),
         namespace: "job",
         service: extract_job_system(span),
         target: transaction_name || span.attributes["code.namespace"] || span.attributes["messaging.sidekiq.job_class"] || span.attributes["messaging.destination"] || "unknown",
         operation: transaction_name ? "perform" : (span.attributes["code.function"] || span.name)
       )
-
-      increment_with_slo(key, duration_ms: duration_ms(span), error: span_error?(span))
     end
 
-    # Web and job entry points also count toward the latency SLO: slow means
-    # over the operation's threshold without erroring.
-    def increment_with_slo(key, duration_ms:, error:)
-      slow = @slo_manager.slow?(namespace: key.namespace, service: key.service, target: key.target,
-                                duration_ms: duration_ms, error: error)
-      @storage.increment(key, duration_ms: duration_ms, error: error, slow: slow)
+    def slow?(key, duration_ms, error)
+      @slo_manager.slow?(namespace: key.namespace, service: key.service, target: key.target,
+                         duration_ms: duration_ms, error: error)
     end
 
     def record_db_metric(span)

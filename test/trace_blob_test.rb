@@ -62,6 +62,25 @@ class TraceBlobTest < Minitest::Test
     assert_equal 42, h["trace_rule_id"]
   end
 
+  def test_capture_reason_read_from_the_span_a_failures_only_rule_tagged
+    spans = [
+      span("root", id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 10_000_000,
+           attrs: { Flare::Sampler::CAPTURE_REASON_ATTRIBUTE => "slow" }),
+      span("inner", id: "\x02".b * 8, parent: "\x01".b * 8, start_ns: 1_000_000, end_ns: 5_000_000)
+    ]
+
+    h = Flare::TraceBlob.build(trace_id: ("\x01".b * 16), spans: spans).to_h
+    assert_equal "slow", h["capture_reason"]
+  end
+
+  def test_capture_reason_is_nil_for_traces_kept_by_all_requests_rules
+    spans = [span("root", id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 10_000_000)]
+
+    h = Flare::TraceBlob.build(trace_id: ("\x01".b * 16), spans: spans).to_h
+    assert h.key?("capture_reason")
+    assert_nil h["capture_reason"]
+  end
+
   def test_root_name_is_truncated_to_server_limit
     spans = [
       span("x" * 300, id: "\x01".b * 8, parent: nil, start_ns: 0, end_ns: 10_000_000)

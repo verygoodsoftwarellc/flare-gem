@@ -322,6 +322,13 @@ module Flare
     @trace_span_processor = FilteringSpanProcessor.new(
       exporter: @trace_exporter,
       marker: @marker,
+      sampler: @sampler,
+      slo_check: MetricSpanProcessor.new(
+        storage: nil,
+        http_metrics_config: configuration.http_metrics_config,
+        ignore_errors: configuration.ignore_errors,
+        slo_manager: slo_manager
+      ),
       max_queue: configuration.tracing_max_queue
     )
     OpenTelemetry.tracer_provider.add_span_processor(@trace_span_processor)

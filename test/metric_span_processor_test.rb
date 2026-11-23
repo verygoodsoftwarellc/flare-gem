@@ -1358,6 +1358,63 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal 1, counter[:slow_count]
   end
 
+  # slo_failure: the verdict FilteringSpanProcessor uses for failures-only trace rules
+
+  def test_slo_failure_is_slow_for_a_request_over_its_threshold
+    processor = slo_judge("web" => 100)
+
+    assert_equal "slow", processor.slo_failure(web_span(status: 200, start_ns: 0, end_ns: 150_000_000))
+  end
+
+  def test_slo_failure_is_nil_for_a_request_within_its_threshold
+    processor = slo_judge("web" => 100)
+
+    assert_nil processor.slo_failure(web_span(status: 200, start_ns: 0, end_ns: 50_000_000))
+  end
+
+  def test_slo_failure_is_error_for_a_5xx_even_when_it_is_also_slow
+    processor = slo_judge("web" => 100)
+
+    assert_equal "error", processor.slo_failure(web_span(status: 500, start_ns: 0, end_ns: 150_000_000))
+    assert_equal "error", processor.slo_failure(web_span(status: 503, start_ns: 0, end_ns: 10_000_000))
+    assert_nil processor.slo_failure(web_span(status: 404, start_ns: 0, end_ns: 10_000_000))
+  end
+
+  def test_slo_failure_is_slow_for_a_job_over_its_threshold
+    processor = slo_judge("job" => 100)
+    job = MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      attributes: { "code.namespace" => "MyJob", "code.function" => "perform", "messaging.system" => "sidekiq" },
+      start_ns: 0,
+      end_ns: 200_000_000
+    )
+
+    assert_equal "slow", processor.slo_failure(job)
+  end
+
+  def test_slo_failure_honors_ignore_errors_like_error_count
+    processor = Flare::MetricSpanProcessor.new(storage: nil, ignore_errors: ["Throttled"], slo_manager: Flare::SloManager.new)
+
+    assert_nil processor.slo_failure(failed_job_span("Throttled"))
+    assert_equal "error", processor.slo_failure(failed_job_span("RuntimeError"))
+  end
+
+  def test_slo_failure_is_nil_for_spans_that_are_not_requests_or_jobs
+    processor = slo_judge("web" => 1, "job" => 1)
+    query = MockSpan.new(kind: :client, parent_span_id: "p", attributes: { "db.system" => "mysql" }, end_ns: 5_000_000_000)
+    asset = MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 200 }, end_ns: 5_000_000_000)
+
+    assert_nil processor.slo_failure(query)
+    assert_nil processor.slo_failure(asset), "a request that never reached a controller has no SLO"
+  end
+
+  def slo_judge(thresholds)
+    slo = Flare::SloManager.new
+    slo.update(thresholds.map { |namespace, ms| { "namespace" => namespace, "threshold_ms" => ms } })
+    Flare::MetricSpanProcessor.new(storage: nil, http_metrics_config: @http_config, slo_manager: slo)
+  end
+
   def web_span(status:, start_ns:, end_ns:)
     MockSpan.new(
       kind: :server,

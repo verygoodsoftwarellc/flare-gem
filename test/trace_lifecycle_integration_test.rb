@@ -56,6 +56,26 @@ class TraceLifecycleIntegrationTest < Minitest::Test
     assert remote.spans.all? { |span| span.trace_flags.sampled? }
   end
 
+  def test_failures_only_rule_submits_only_requests_that_fail_the_slo
+    provider, remote = configured_provider(
+      rules: [{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" }, "rate" => 1.0,
+                "capture" => "slo_failures" }],
+      slo_rules: [{ "namespace" => "web", "threshold_ms" => 20 }]
+    )
+    attributes = { "code.namespace" => "UsersController", "code.function" => "index" }
+
+    finish_request_trace(provider, attributes: attributes.merge("http.status_code" => 200))
+    finish_request_trace(provider, attributes: attributes.merge("http.status_code" => 200)) { sleep 0.05 }
+    finish_request_trace(provider, attributes: attributes.merge("http.status_code" => 500))
+
+    assert_equal SUCCESS, provider.force_flush(timeout: 1)
+    assert_equal 6, stored_span_names.length, "local storage still keeps every request"
+
+    blobs = remote.spans.group_by(&:trace_id).map { |trace_id, spans| Flare::TraceBlob.build(trace_id: trace_id, spans: spans).to_h }
+    assert_equal %w[error slow], blobs.map { |blob| blob["capture_reason"] }.sort
+    assert blobs.all? { |blob| blob["trace_rule_id"] == 7 && blob["spans"].length == 2 }
+  end
+
   def test_without_key_local_always_on_behavior_is_unchanged
     Flare.configuration.key = nil
     refute Flare.configuration.tracing_submission_configured?
@@ -69,7 +89,7 @@ class TraceLifecycleIntegrationTest < Minitest::Test
 
   private
 
-  def configured_provider(rules:)
+  def configured_provider(rules:, slo_rules: [])
     sampler = Flare::Sampler.new
     sampler.update_rules(rules)
     provider = OpenTelemetry::SDK::Trace::TracerProvider.new(
@@ -83,9 +103,13 @@ class TraceLifecycleIntegrationTest < Minitest::Test
     add_local_processor(provider)
 
     remote = RecordingTraceExporter.new
+    slo_manager = Flare::SloManager.new
+    slo_manager.update(slo_rules)
     processor = Flare::FilteringSpanProcessor.new(
       exporter: remote,
       marker: Flare::Marker.new,
+      sampler: sampler,
+      slo_check: Flare::MetricSpanProcessor.new(storage: nil, slo_manager: slo_manager),
       flush_interval: 60,
       logger: Logger.new(IO::NULL)
     )
@@ -108,6 +132,7 @@ class TraceLifecycleIntegrationTest < Minitest::Test
     tracer = provider.tracer("lifecycle-test")
     tracer.in_span("GET /users", kind: :server, attributes: attributes) do
       tracer.in_span("sql.active_record", attributes: { "db.system" => "sqlite" }) { nil }
+      yield if block_given?
     end
   end
 

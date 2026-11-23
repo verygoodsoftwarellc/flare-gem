@@ -25,8 +25,17 @@ module Flare
     Result   = OpenTelemetry::SDK::Trace::Samplers::Result
 
     RULE_ID_ATTRIBUTE = "flare.rule_id"
+    CAPTURE_REASON_ATTRIBUTE = "flare.capture_reason"
 
-    Rule = Struct.new(:id, :match_attributes, :rate, keyword_init: true)
+    # What a rule keeps. all_requests uploads every request it samples.
+    # slo_failures uploads only requests that fail their operation's latency
+    # SLO (slow or errored); FilteringSpanProcessor drops the rest when the
+    # request ends. A missing or unknown value means all_requests, which is
+    # what servers that predate the field mean.
+    CAPTURE_ALL_REQUESTS = "all_requests"
+    CAPTURE_SLO_FAILURES = "slo_failures"
+
+    Rule = Struct.new(:id, :match_attributes, :rate, :capture, keyword_init: true)
 
     attr_reader :dropped_rule_count
 
@@ -36,7 +45,7 @@ module Flare
     end
 
     # new_rules: an array of rule hashes from GET /api/rules, e.g.
-    #   [{ "id" => 1, "match_attributes" => {...}, "rate" => 0.5 }, ...]
+    #   [{ "id" => 1, "match_attributes" => {...}, "rate" => 0.5, "capture" => "slo_failures" }, ...]
     # Entries that don't validate are skipped (counted in dropped_rule_count).
     def update_rules(new_rules)
       validated = (new_rules || []).filter_map { |r| validate(r) }
@@ -46,6 +55,15 @@ module Flare
 
     def rules
       @rules_ref.get
+    end
+
+    # True when the rule with this id keeps only SLO failures. False for an
+    # unknown id (the rule expired mid-request), which keeps today's
+    # all_requests behavior.
+    def capture_slo_failures?(rule_id)
+      return false if rule_id.nil?
+
+      rules.any? { |rule| rule.id == rule_id && rule.capture == CAPTURE_SLO_FAILURES }
     end
 
     def should_sample?(trace_id:, parent_context:, links:, name:, kind:, attributes:)
@@ -95,13 +113,15 @@ module Flare
       id    = raw["id"] || raw[:id]
       match = raw["match_attributes"] || raw[:match_attributes]
       rate  = raw["rate"] || raw[:rate]
+      capture = raw["capture"] || raw[:capture]
+      capture = CAPTURE_ALL_REQUESTS unless capture == CAPTURE_SLO_FAILURES
 
       return nil if id.nil?
       return nil unless match.is_a?(Hash) && match.any?
       return nil unless match.all? { |k, v| k.is_a?(String) && v.is_a?(String) && !v.empty? }
       return nil unless rate.is_a?(Numeric) && rate > 0.0 && rate <= 1.0
 
-      Rule.new(id: id, match_attributes: match, rate: rate.to_f)
+      Rule.new(id: id, match_attributes: match, rate: rate.to_f, capture: capture)
     rescue StandardError
       nil
     end

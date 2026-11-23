@@ -16,6 +16,11 @@ module Flare
   # On every on_finish we also check marker.owner?(trace_id, span_id) and
   # unmark when the owning rack span finishes (CAF-2). Cleanup runs even
   # for spans we don't export.
+  #
+  # A trace whose rule keeps only SLO failures is judged when its request
+  # ends (the span that completes it): a request that passed its SLO has
+  # its buffered spans dropped, and one that failed is exported with
+  # flare.capture_reason ("slow" or "error") on that span.
   class FilteringSpanProcessor
     SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
     FAILURE = OpenTelemetry::SDK::Trace::Export::FAILURE
@@ -28,7 +33,11 @@ module Flare
 
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
-    def initialize(exporter:, marker:,
+    # sampler and slo_check enable failures-only rules: sampler says which
+    # rules keep only SLO failures, and slo_check (a MetricSpanProcessor)
+    # judges a finished request with slo_failure(span). Without both, every
+    # rule keeps every request it samples.
+    def initialize(exporter:, marker:, sampler: nil, slo_check: nil,
                    max_queue: DEFAULT_MAX_QUEUE,
                    flush_interval: DEFAULT_FLUSH_INTERVAL,
                    export_timeout: DEFAULT_EXPORT_TIMEOUT,
@@ -36,6 +45,8 @@ module Flare
                    logger: nil)
       @exporter       = exporter
       @marker         = marker
+      @sampler        = sampler
+      @slo_check      = slo_check
       @max_queue      = max_queue
       @flush_interval = flush_interval
       @export_timeout = export_timeout
@@ -77,9 +88,18 @@ module Flare
       return unless sampled || marked
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
+      complete = owner_finished || sampled_completion_span?(span_data)
+
+      if complete && slo_failures_only?(ctx.trace_id, span_data, marked)
+        reason = @slo_check.slo_failure(span_data)
+        return discard_trace(ctx.trace_id) unless reason
+
+        span_data = with_capture_reason(span_data, reason)
+      end
+
       enqueue(
         span_data,
-        complete: owner_finished || sampled_completion_span?(span_data),
+        complete: complete,
         delay: owner_finished ? @marked_trace_grace_period : 0
       )
     rescue StandardError => e
@@ -142,6 +162,33 @@ module Flare
     end
 
     private
+
+    def slo_failures_only?(trace_id, span_data, marked)
+      return false unless @sampler && @slo_check
+
+      rule_id = marked ? @marker.rule_id(trace_id) : span_data.attributes&.[](Sampler::RULE_ID_ATTRIBUTE)
+      @sampler.capture_slo_failures?(rule_id)
+    end
+
+    # The request passed its SLO: drop what was buffered for it and stop
+    # following the trace, so spans that finish later are dropped too.
+    def discard_trace(trace_id)
+      @mutex.synchronize do
+        batch = @pending_by_trace.delete(trace_id)
+        if batch
+          @trace_order.delete(trace_id)
+          @pending_count -= batch.length
+        end
+        @delayed_ready_by_trace.delete(trace_id)
+      end
+      @marker.unmark(trace_id)
+    end
+
+    def with_capture_reason(span_data, reason)
+      tagged = span_data.dup
+      tagged.attributes = (span_data.attributes || {}).merge(Sampler::CAPTURE_REASON_ATTRIBUTE => reason).freeze
+      tagged
+    end
 
     def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do

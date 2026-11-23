@@ -12,6 +12,7 @@ module Flare
   #   {
   #     "trace_id":       "<hex>",
   #     "trace_rule_id":  <int|nil>,
+  #     "capture_reason": "slow"|"error"|nil,
   #     "root_name":      "<string>",
   #     "started_at":     "<iso8601>",
   #     "duration_ms":    <int>,
@@ -23,7 +24,9 @@ module Flare
   #
   # The trace_rule_id is read from any span carrying the
   # `flare.rule_id` attribute (Path 1 sets it on the sampled root, Path 2
-  # sets it on the rack owner span via WebMarkerSubscriber).
+  # sets it on the rack owner span via WebMarkerSubscriber). capture_reason
+  # comes from `flare.capture_reason`, which FilteringSpanProcessor sets when
+  # a failures-only rule keeps the trace.
   class TraceBlob
     ZERO_SPAN_ID = ("\x00".b * 8).freeze
     ROOT_NAME_LIMIT = 255
@@ -44,6 +47,7 @@ module Flare
       UTF8.scrub({
         "trace_id"      => hexify(@trace_id),
         "trace_rule_id" => rule_id_from_spans,
+        "capture_reason" => capture_reason_from_spans,
         "root_name"     => root_name(root),
         "started_at"    => iso(root&.start_timestamp),
         "duration_ms"   => duration_ms(root),
@@ -75,6 +79,14 @@ module Flare
     def rule_id_from_spans
       @spans.each do |s|
         value = rule_id_attribute(s)
+        return value if value
+      end
+      nil
+    end
+
+    def capture_reason_from_spans
+      @spans.each do |s|
+        value = s.attributes&.[](Sampler::CAPTURE_REASON_ATTRIBUTE)
         return value if value
       end
       nil

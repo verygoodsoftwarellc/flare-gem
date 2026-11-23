@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "flare/marker"
+require "flare/sampler"
 require "flare/filtering_span_processor"
 
 class FilteringSpanProcessorTest < Minitest::Test
@@ -106,6 +107,84 @@ class FilteringSpanProcessorTest < Minitest::Test
     @processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false))
 
     assert @marker.marked?("t1")
+  end
+
+  # ----- Failures-only rules ----------------------------------------------
+
+  def test_failures_only_marked_trace_that_passed_its_slo_is_dropped
+    processor = failures_only_processor(verdict: nil)
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    processor.on_finish(span(trace_id: "t1", span_id: "late-child", sampled: false, parent_span_id: "rack"))
+    processor.force_flush
+
+    assert_equal %w[rack], @slo_check.judged
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+    refute @marker.marked?("t1")
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_failures_only_marked_trace_that_failed_its_slo_is_exported_with_the_reason
+    processor = failures_only_processor(verdict: "slow")
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    wait_until { @exporter.exports.flatten.length == 2 }
+
+    exported = @exporter.exports.flatten.to_h { |s| [s.span_id, s] }
+    assert_equal "slow", exported["rack"].attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE]
+    assert_nil exported["child"].attributes
+    refute @marker.marked?("t1")
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_failures_only_sampled_trace_is_judged_at_its_root
+    processor = failures_only_processor(verdict: "error")
+    rule_attrs = { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 }
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer, attributes: rule_attrs))
+    processor.force_flush
+
+    exported = @exporter.exports.flatten.to_h { |s| [s.span_id, s] }
+    assert_equal %w[child root], exported.keys
+    assert_equal "error", exported["root"].attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE]
+    assert_equal 7, exported["root"].attributes[Flare::Sampler::RULE_ID_ATTRIBUTE]
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_failures_only_sampled_trace_that_passed_its_slo_is_dropped
+    processor = failures_only_processor(verdict: nil)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
+    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                             attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 }))
+    processor.force_flush
+
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_all_requests_rule_keeps_every_trace_without_judging_it
+    processor = failures_only_processor(verdict: nil, capture: "all_requests")
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    wait_until { @exporter.exports.flatten.length == 1 }
+
+    assert_empty @slo_check.judged
+    assert_nil @exporter.exports.flatten.first.attributes
+  ensure
+    processor&.shutdown(timeout: 1)
   end
 
   def test_rescues_exporter_exceptions_and_counts_them
@@ -383,8 +462,39 @@ class FilteringSpanProcessorTest < Minitest::Test
     end
   end
 
-  def span(trace_id:, span_id:, sampled:, parent_span_id: "parent", kind: :internal)
-    MockSpan.new(trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id, sampled: sampled, kind: kind)
+  def span(trace_id:, span_id:, sampled:, parent_span_id: "parent", kind: :internal, attributes: nil)
+    MockSpan.new(trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id, sampled: sampled, kind: kind,
+                 attributes: attributes)
+  end
+
+  def failures_only_processor(verdict:, capture: "slo_failures")
+    sampler = Flare::Sampler.new
+    sampler.update_rules([{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" },
+                            "rate" => 1.0, "capture" => capture }])
+    @slo_check = FakeSloCheck.new(verdict)
+    Flare::FilteringSpanProcessor.new(
+      exporter:       @exporter,
+      marker:         @marker,
+      sampler:        sampler,
+      slo_check:      @slo_check,
+      flush_interval: 0.05,
+      marked_trace_grace_period: 0.05,
+      logger:         Logger.new(IO::NULL)
+    )
+  end
+
+  class FakeSloCheck
+    attr_reader :judged
+
+    def initialize(verdict)
+      @verdict = verdict
+      @judged = []
+    end
+
+    def slo_failure(span_data)
+      @judged << span_data.span_id
+      @verdict
+    end
   end
 
   class RecordingExporter
@@ -451,10 +561,11 @@ class FilteringSpanProcessorTest < Minitest::Test
   end
 
   class MockSpan
-    SpanData = Struct.new(:trace_id, :span_id, :parent_span_id, :kind, keyword_init: true)
+    SpanData = Struct.new(:trace_id, :span_id, :parent_span_id, :kind, :attributes, keyword_init: true)
 
-    def initialize(trace_id:, span_id:, parent_span_id:, sampled:, kind:)
-      @data = SpanData.new(trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id, kind: kind)
+    def initialize(trace_id:, span_id:, parent_span_id:, sampled:, kind:, attributes: nil)
+      @data = SpanData.new(trace_id: trace_id, span_id: span_id, parent_span_id: parent_span_id, kind: kind,
+                           attributes: attributes)
       @ctx  = MockContext.new(trace_id, span_id, MockFlags.new(sampled))
     end
 

@@ -96,6 +96,35 @@ class SamplerTest < Minitest::Test
 
   # ----- trace_id_ratio ----------------------------------------------------
 
+  # ----- Capture mode ------------------------------------------------------
+
+  def test_rules_keep_the_capture_mode_the_server_sent
+    @sampler.update_rules([
+      rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "slo_failures"),
+      rule(id: 2, match: { "code.namespace" => "B" }, rate: 1.0).merge("capture" => "all_requests"),
+      rule(id: 3, match: { "code.namespace" => "C" }, rate: 1.0)
+    ])
+
+    assert @sampler.capture_slo_failures?(1)
+    refute @sampler.capture_slo_failures?(2)
+    refute @sampler.capture_slo_failures?(3), "a server that predates capture means all_requests"
+  end
+
+  def test_unknown_capture_mode_keeps_the_rule_as_all_requests
+    @sampler.update_rules([rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "someday")])
+
+    assert_equal 1, @sampler.rules.length
+    assert_equal 0, @sampler.dropped_rule_count.value
+    refute @sampler.capture_slo_failures?(1)
+  end
+
+  def test_capture_slo_failures_is_false_for_a_rule_that_is_gone
+    @sampler.update_rules([rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "slo_failures")])
+
+    refute @sampler.capture_slo_failures?(99)
+    refute @sampler.capture_slo_failures?(nil)
+  end
+
   def test_trace_id_ratio_is_deterministic_per_id
     a = @sampler.trace_id_ratio("\x00" * 16)
     b = @sampler.trace_id_ratio("\x00" * 16)
