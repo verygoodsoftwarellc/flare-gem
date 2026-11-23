@@ -125,9 +125,23 @@ class TraceFilterTest < Minitest::Test
     assert build_query("equals", "page", "2").match?(web(query: "&page=2&"))
   end
 
-  def test_semicolon_is_not_a_separator
-    refute build_query("present", "page").match?(web(query: "a=1;page=2"))
-    assert build_query("equals", "a", "1;page=2").match?(web(query: "a=1;page=2"))
+  # Rack 3 splits only on &; Rack 2 also splits on ;. Follow the installed one.
+  def test_separator_follows_the_installed_rack
+    semicolon_separates = "a=1;page=2".split(Rack::QueryParser::DEFAULT_SEP).length == 2
+
+    assert_equal semicolon_separates, build_query("present", "page").match?(web(query: "a=1;page=2"))
+    assert_equal !semicolon_separates, build_query("equals", "a", "1;page=2").match?(web(query: "a=1;page=2"))
+  end
+
+  def test_rack_2_splits_on_semicolons_too
+    original = Rack::QueryParser::DEFAULT_SEP
+    Rack::QueryParser.send(:remove_const, :DEFAULT_SEP)
+    Rack::QueryParser.const_set(:DEFAULT_SEP, /[&;] */n) # Rack 2's value
+
+    assert build_query("present", "page").match?(web(query: "a=1;page=2"))
+  ensure
+    Rack::QueryParser.send(:remove_const, :DEFAULT_SEP)
+    Rack::QueryParser.const_set(:DEFAULT_SEP, original)
   end
 
   def test_bare_key_is_present_but_has_no_value

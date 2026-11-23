@@ -130,15 +130,15 @@ module Flare
       end
     end
 
-    # Walks the query's &-separated pairs (Rack 3's separator) looking only
-    # for @name, decoding each pair on its own so one malformed parameter
+    # Walks the query's pairs, split the way the installed Rack splits them
+    # (& on Rack 3, & or ; on Rack 2), looking only for @name, decoding each pair on its own so one malformed parameter
     # (bad percent-encoding) can't hide the others; an undecodable key or
     # value is compared as written. A bare key (?preview) is present with no
     # value, so it never equals "" the way ?preview= does.
     def query_param_match?(query)
       return false if query.nil? || query.empty?
 
-      query.split("&").each do |pair|
+      query.split(Rack::QueryParser::DEFAULT_SEP).each do |pair|
         next if pair.empty?
 
         key, value = pair.split("=", 2)

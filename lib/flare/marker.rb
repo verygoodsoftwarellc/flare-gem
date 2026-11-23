@@ -68,9 +68,10 @@ module Flare
       entry&.rule_id
     end
 
-    def judged?(trace_id)
-      entry = @entries[trace_id]
-      !entry.nil? && entry.judged == true
+    # The whole entry, so a caller reading several fields sees one snapshot
+    # even if a sweep evicts the trace in between. Treat it as read-only.
+    def entry(trace_id)
+      @entries[trace_id]
     end
 
     def unmark(trace_id)

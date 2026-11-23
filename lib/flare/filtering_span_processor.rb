@@ -208,12 +208,12 @@ module Flare
     def judged_rule(trace_id, marked)
       return nil if !marked || @sampler.nil? || @slo_check.nil?
 
-      rule_id = @marker.rule_id(trace_id)
-      return nil if rule_id.nil?
+      entry = @marker.entry(trace_id)
+      return nil if entry.nil? || entry.rule_id.nil?
 
-      rule = @sampler.rules.find { |candidate| candidate.id == rule_id }
+      rule = @sampler.rules.find { |candidate| candidate.id == entry.rule_id }
       if rule.nil?
-        return @marker.judged?(trace_id) ? EXPIRED_RULE : nil
+        return entry.judged ? EXPIRED_RULE : nil
       end
 
       rule.judged? ? rule : nil
