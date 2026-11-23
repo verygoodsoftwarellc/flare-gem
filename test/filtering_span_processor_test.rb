@@ -191,6 +191,19 @@ ensure
   processor&.shutdown(timeout: 1)
 end
 
+def test_shutdown_drops_a_failures_only_trace_still_awaiting_its_verdict
+  processor = failures_only_processor(verdict: nil)
+  @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+  processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+
+  processor.shutdown(timeout: 1)
+  @marker.unmark("t1")
+  processor.force_flush
+
+  assert_empty @exporter.exports.flatten
+  assert_equal 0, processor.buffer_size
+end
+
   def test_failures_only_sampled_trace_is_judged_at_its_root
     processor = failures_only_processor(verdict: "error")
     root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,

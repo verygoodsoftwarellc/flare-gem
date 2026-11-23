@@ -306,6 +306,7 @@ module Flare
         # spans stay buffered; everything else goes out now.
         held = @pending_by_trace.select { |trace_id, _| awaiting_verdict?(trace_id) }
         @pending_by_trace.each { |trace_id, spans| @ready_queue.concat(spans) unless held.key?(trace_id) }
+        held.clear if @stopped # after shutdown they never get a verdict
         @pending_by_trace.replace(held)
         @trace_order.select! { |trace_id| held.key?(trace_id) }
         @pending_count = held.each_value.sum(&:length)
