@@ -17,12 +17,15 @@ module Flare
   # unmark when the owning rack span finishes (CAF-2). Cleanup runs even
   # for spans we don't export.
   #
-  # A trace whose rule keeps only SLO failures is judged when its request
-  # ends, the owner span finishing: a request that passed its SLO has its
-  # buffered spans dropped, and one that failed is exported with
-  # flare.capture_reason ("slow" or "error") on that span. on_start marks a
-  # sampled root of such a rule, so a sampled request has an owner too, and
-  # a job or server span nested inside it (perform_now) doesn't end it.
+  # A trace whose rule is judged (capture other than all_requests, or any
+  # filters) gets its verdict when its request ends, the owner span
+  # finishing. A request the rule doesn't keep has its buffered spans
+  # dropped; one it keeps is exported with flare.capture_reason on that
+  # span: "slow" or "error" for a failure, "baseline" for a passing request
+  # kept for comparison, "match" for an all_requests rule's filtered match.
+  # on_start marks a sampled root of such a rule, so a sampled request has
+  # an owner too, and a job or server span nested inside it (perform_now)
+  # doesn't end it.
   class FilteringSpanProcessor
     SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
     FAILURE = OpenTelemetry::SDK::Trace::Export::FAILURE
@@ -33,12 +36,18 @@ module Flare
     DEFAULT_EXPORT_TIMEOUT = 30     # seconds
     DEFAULT_MARKED_TRACE_GRACE_PERIOD = 1.0 # seconds
 
+    # Passing requests kept per rule in this process while the server asks
+    # for a baseline. The server stops asking once it has enough, but only on
+    # the next poll; this keeps a busy endpoint from spending the shared
+    # upload URLs on passing requests meanwhile.
+    BASELINES_PER_RULE = 2
+
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
-    # sampler and slo_check enable failures-only rules: sampler says which
-    # rules keep only SLO failures, and slo_check (a MetricSpanProcessor)
-    # judges a finished request with slo_failure(span). Without both, every
-    # rule keeps every request it samples.
+    # sampler and slo_check enable judged rules: sampler says which rules
+    # judge their requests, and slo_check (a MetricSpanProcessor) says
+    # whether a finished request failed its SLO with slo_failure(span).
+    # Without both, every rule keeps every request it samples.
     def initialize(exporter:, marker:, sampler: nil, slo_check: nil,
                    max_queue: DEFAULT_MAX_QUEUE,
                    flush_interval: DEFAULT_FLUSH_INTERVAL,
@@ -67,6 +76,7 @@ module Flare
       @export_completion_sequence = 0
       @last_export_result = SUCCESS
       @flush_owner      = nil
+      @baselines_taken  = {}
       @pid              = $$
 
       @dropped_count       = Concurrent::AtomicFixnum.new(0)
@@ -78,13 +88,13 @@ module Flare
     end
 
     def on_start(span, _parent_context)
-      return unless @sampler && @slo_check
+      return if @sampler.nil? || @slo_check.nil?
 
       ctx = span.context
-      return unless ctx&.trace_flags&.sampled? && root_span?(span)
+      return if !ctx&.trace_flags&.sampled? || !root_span?(span)
 
       rule_id = span.attributes&.[](Sampler::RULE_ID_ATTRIBUTE)
-      return unless @sampler.capture_slo_failures?(rule_id)
+      return unless @sampler.judged_rule(rule_id)
 
       @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule_id)
     rescue StandardError => e
@@ -104,11 +114,12 @@ module Flare
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
 
-      if complete && slo_failures_only?(ctx.trace_id, marked)
+      rule = judged_rule(ctx.trace_id, marked) if complete
+      if rule
         # Only the owner ends the request; a nested job or server span is part of it.
         return enqueue(span_data, complete: false) unless owner_finished
 
-        reason = @slo_check.slo_failure(span_data)
+        reason = verdict(rule, span_data)
         return discard_trace(ctx.trace_id) unless reason
 
         span_data = with_capture_reason(span_data, reason)
@@ -184,21 +195,56 @@ module Flare
       @logger.warn("[Flare::FilteringSpanProcessor] #{callback} failed: #{error.class}: #{error.message}")
     end
 
-    # Failures-only traces are always marked: by WebMarkerSubscriber, or by
+    # Judged traces are always marked: by WebMarkerSubscriber, or by
     # on_start for a sampled root.
-    def slo_failures_only?(trace_id, marked)
-      return false unless marked && @sampler && @slo_check
+    def judged_rule(trace_id, marked)
+      return nil if !marked || @sampler.nil? || @slo_check.nil?
 
-      @sampler.capture_slo_failures?(@marker.rule_id(trace_id))
+      @sampler.judged_rule(@marker.rule_id(trace_id))
     end
 
-    # A failure-delayed trace already has its verdict; it waits only for late spans.
+    # A kept trace waiting on its grace period already has its verdict; it
+    # waits only for late spans.
     def awaiting_verdict?(trace_id)
-      !@delayed_ready_by_trace.key?(trace_id) && slo_failures_only?(trace_id, @marker.marked?(trace_id))
+      !@delayed_ready_by_trace.key?(trace_id) && !judged_rule(trace_id, @marker.marked?(trace_id)).nil?
     end
 
-    # The request passed its SLO: drop what was buffered for it and stop
-    # following the trace, so spans that finish later are dropped too.
+    # Why the rule keeps this finished request, or nil to drop it. A request
+    # has to match every filter. Then all_requests keeps it, errors keeps an
+    # error, and slo_failures keeps a slow or errored request. A request
+    # that didn't fail can still be kept as a baseline while the server asks
+    # for one.
+    def verdict(rule, span_data)
+      return nil unless rule.filters.all? { |filter| filter.match?(span_data) }
+      return "match" if rule.capture == Sampler::CAPTURE_ALL_REQUESTS
+
+      failure = @slo_check.slo_failure(span_data)
+      failure = nil if rule.capture == Sampler::CAPTURE_ERRORS && failure != "error"
+      return failure if failure
+
+      "baseline" if rule.baseline && take_baseline(rule.id)
+    end
+
+    def take_baseline(rule_id)
+      @mutex.synchronize do
+        prune_baselines if @baselines_taken.size > 64
+        taken = @baselines_taken.fetch(rule_id, 0)
+        return false if taken >= BASELINES_PER_RULE
+
+        @baselines_taken[rule_id] = taken + 1
+        true
+      end
+    end
+
+    # Rules last an hour at most, so forget counts for rules the server no
+    # longer sends. Caller holds @mutex.
+    def prune_baselines
+      current = @sampler.rules.map(&:id)
+      @baselines_taken = @baselines_taken.select { |rule_id, _| current.include?(rule_id) }
+    end
+
+    # The rule doesn't keep the request: drop what was buffered for it and
+    # stop following the trace, so spans that finish later are dropped too.
     def discard_trace(trace_id)
       @mutex.synchronize do
         take_pending(trace_id)
@@ -510,6 +556,7 @@ module Flare
       @last_export_result = SUCCESS
       @flush_prior_result = SUCCESS
       @flush_owner = nil
+      @baselines_taken = {}
       @stopped = false
       @worker = nil
       start_worker

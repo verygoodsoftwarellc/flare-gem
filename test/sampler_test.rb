@@ -102,12 +102,14 @@ class SamplerTest < Minitest::Test
     @sampler.update_rules([
       rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "slo_failures"),
       rule(id: 2, match: { "code.namespace" => "B" }, rate: 1.0).merge("capture" => "all_requests"),
-      rule(id: 3, match: { "code.namespace" => "C" }, rate: 1.0)
+      rule(id: 3, match: { "code.namespace" => "C" }, rate: 1.0),
+      rule(id: 4, match: { "code.namespace" => "D" }, rate: 1.0).merge("capture" => "errors")
     ])
 
-    assert @sampler.capture_slo_failures?(1)
-    refute @sampler.capture_slo_failures?(2)
-    refute @sampler.capture_slo_failures?(3), "a server that predates capture means all_requests"
+    assert_equal "slo_failures", @sampler.judged_rule(1).capture
+    assert_nil @sampler.judged_rule(2)
+    assert_nil @sampler.judged_rule(3), "a server that predates capture means all_requests"
+    assert_equal "errors", @sampler.judged_rule(4).capture
   end
 
   def test_unknown_capture_mode_keeps_the_rule_as_all_requests
@@ -115,14 +117,62 @@ class SamplerTest < Minitest::Test
 
     assert_equal 1, @sampler.rules.length
     assert_equal 0, @sampler.dropped_rule_count.value
-    refute @sampler.capture_slo_failures?(1)
+    assert_equal "all_requests", @sampler.rules.first.capture
+    assert_nil @sampler.judged_rule(1)
   end
 
-  def test_capture_slo_failures_is_false_for_a_rule_that_is_gone
+  def test_judged_rule_is_nil_for_a_rule_that_is_gone
     @sampler.update_rules([rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "slo_failures")])
 
-    refute @sampler.capture_slo_failures?(99)
-    refute @sampler.capture_slo_failures?(nil)
+    assert_nil @sampler.judged_rule(99)
+    assert_nil @sampler.judged_rule(nil)
+  end
+
+  def test_baseline_is_true_only_when_the_server_says_true
+    @sampler.update_rules([
+      rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge("capture" => "slo_failures", "baseline" => true),
+      rule(id: 2, match: { "code.namespace" => "B" }, rate: 1.0).merge("capture" => "slo_failures", "baseline" => "yes"),
+      rule(id: 3, match: { "code.namespace" => "C" }, rate: 1.0).merge("capture" => "slo_failures")
+    ])
+
+    assert_equal [true, false, false], @sampler.rules.map(&:baseline)
+  end
+
+  # ----- Filters -----------------------------------------------------------
+
+  def test_filters_are_compiled_once_and_make_an_all_requests_rule_judged
+    @sampler.update_rules([
+      rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge(
+        "capture" => "all_requests",
+        "filters" => [
+          { "field" => "url.path", "op" => "prefix", "value" => "/passages/", "negate" => false },
+          { "field" => "http.status_code", "op" => "between", "value" => [500, 599], "negate" => true }
+        ]
+      )
+    ])
+
+    rule = @sampler.judged_rule(1)
+    assert rule, "filters mean the request must finish before we know whether to keep it"
+    assert_equal 2, rule.filters.length
+    assert(rule.filters.all? { |filter| filter.is_a?(Flare::TraceFilter) })
+    assert rule.filters.frozen?
+  end
+
+  def test_rule_with_an_unknown_filter_op_is_dropped
+    @sampler.update_rules([
+      rule(id: 1, match: { "code.namespace" => "A" }, rate: 1.0).merge(
+        "filters" => [{ "field" => "url.path", "op" => "regex", "value" => "/passages/.*" }]
+      ),
+      rule(id: 2, match: { "code.namespace" => "B" }, rate: 1.0).merge(
+        "filters" => [{ "field" => "user.id", "op" => "equals", "value" => "1" }]
+      ),
+      rule(id: 3, match: { "code.namespace" => "C" }, rate: 1.0).merge("filters" => "url.path=/a"),
+      rule(id: 4, match: { "code.namespace" => "D" }, rate: 1.0).merge("filters" => [])
+    ])
+
+    assert_equal [4], @sampler.rules.map(&:id)
+    assert_equal 3, @sampler.dropped_rule_count.value
+    assert_nil @sampler.judged_rule(4), "no filters and all_requests is not judged"
   end
 
   def test_trace_id_ratio_is_deterministic_per_id

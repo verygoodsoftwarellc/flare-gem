@@ -252,6 +252,112 @@ end
     processor&.shutdown(timeout: 1)
   end
 
+  # ----- Errors mode, baselines and filters --------------------------------
+
+  def test_errors_rule_drops_a_slow_request_and_keeps_an_error
+    processor = failures_only_processor(verdict: "slow", capture: "errors")
+    @marker.mark("slow", owner_span_id: "rack-slow", rule_id: 7)
+    processor.on_finish(span(trace_id: "slow", span_id: "rack-slow", sampled: false, parent_span_id: "remote", kind: :server))
+    processor.force_flush
+    assert_empty @exporter.exports.flatten
+
+    @slo_check.verdict = "error"
+    @marker.mark("error", owner_span_id: "rack-error", rule_id: 7)
+    processor.on_finish(span(trace_id: "error", span_id: "rack-error", sampled: false, parent_span_id: "remote", kind: :server))
+    wait_until { @exporter.exports.flatten.length == 1 }
+
+    assert_equal "error", @exporter.exports.flatten.first.attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE]
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_baseline_keeps_passing_requests_up_to_the_per_rule_cap
+    processor = failures_only_processor(verdict: nil, baseline: true)
+
+    3.times do |i|
+      @marker.mark("t#{i}", owner_span_id: "rack#{i}", rule_id: 7)
+      processor.on_finish(span(trace_id: "t#{i}", span_id: "rack#{i}", sampled: false, parent_span_id: "remote", kind: :server))
+    end
+    processor.force_flush
+
+    exported = @exporter.exports.flatten
+    assert_equal Flare::FilteringSpanProcessor::BASELINES_PER_RULE, exported.length
+    assert(exported.all? { |s| s.attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE] == "baseline" })
+    refute @marker.marked?("t2"), "the request past the cap is dropped"
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_failure_is_kept_as_a_failure_even_when_baselines_are_wanted
+    processor = failures_only_processor(verdict: "slow", baseline: true)
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    wait_until { @exporter.exports.flatten.length == 1 }
+
+    assert_equal "slow", @exporter.exports.flatten.first.attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE]
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_request_outside_the_filters_is_dropped_without_judging_its_slo
+    processor = failures_only_processor(
+      verdict: "slow",
+      filters: [{ "field" => "url.path", "op" => "prefix", "value" => "/passages/" }]
+    )
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: false, parent_span_id: "rack"))
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server,
+                             attributes: { "url.path" => "/sermons/1" }))
+    processor.force_flush
+
+    assert_empty @slo_check.judged
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_all_requests_rule_with_filters_keeps_matches_as_match
+    processor = failures_only_processor(
+      verdict: nil,
+      capture: "all_requests",
+      filters: [{ "field" => "url.path", "op" => "prefix", "value" => "/admin", "negate" => true }]
+    )
+    @marker.mark("admin", owner_span_id: "rack-admin", rule_id: 7)
+    @marker.mark("public", owner_span_id: "rack-public", rule_id: 7)
+
+    processor.on_finish(span(trace_id: "admin", span_id: "rack-admin", sampled: false, parent_span_id: "remote",
+                             kind: :server, attributes: { "url.path" => "/admin/users" }))
+    processor.on_finish(span(trace_id: "public", span_id: "rack-public", sampled: false, parent_span_id: "remote",
+                             kind: :server, attributes: { "url.path" => "/passages/1" }))
+    processor.force_flush
+
+    exported = @exporter.exports.flatten
+    assert_equal %w[rack-public], exported.map(&:span_id)
+    assert_equal "match", exported.first.attributes[Flare::Sampler::CAPTURE_REASON_ATTRIBUTE]
+    assert_empty @slo_check.judged, "all_requests never asks about the SLO"
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
+  def test_sampled_root_of_a_filtered_rule_is_marked_at_start
+    processor = failures_only_processor(
+      verdict: nil,
+      capture: "all_requests",
+      filters: [{ "field" => "duration_ms", "op" => "between", "value" => [1000, nil] }]
+    )
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
+
+    processor.on_start(root, nil)
+
+    assert @marker.marked?("t1")
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_rescues_exporter_exceptions_and_counts_them
     @exporter.raise_with = RuntimeError.new("boom")
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: true))
@@ -532,10 +638,11 @@ end
                  attributes: attributes)
   end
 
-  def failures_only_processor(verdict:, capture: "slo_failures")
+  def failures_only_processor(verdict:, capture: "slo_failures", baseline: false, filters: [])
     sampler = Flare::Sampler.new
     sampler.update_rules([{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" },
-                            "rate" => 1.0, "capture" => capture }])
+                            "rate" => 1.0, "capture" => capture, "baseline" => baseline, "filters" => filters }])
+    assert_equal 1, sampler.rules.length, "the test rule must validate"
     @slo_check = FakeSloCheck.new(verdict)
     Flare::FilteringSpanProcessor.new(
       exporter:       @exporter,
@@ -550,6 +657,7 @@ end
 
   class FakeSloCheck
     attr_reader :judged
+    attr_writer :verdict
 
     def initialize(verdict)
       @verdict = verdict

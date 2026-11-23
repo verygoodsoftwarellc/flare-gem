@@ -97,6 +97,33 @@ def test_failures_only_rule_judges_a_request_that_runs_a_job_inline_at_the_reque
   assert_equal ["GET /users", "ReportJob perform", "sql.active_record"], blobs.first["spans"].map { |s| s["name"] }.sort
 end
 
+  def test_errors_rule_with_filters_keeps_matching_errors_and_a_capped_baseline
+    provider, remote = configured_provider(
+      rules: [{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" }, "rate" => 1.0,
+                "capture" => "errors", "baseline" => true,
+                "filters" => [
+                  { "field" => "url.path", "op" => "prefix", "value" => "/users" },
+                  { "field" => "http.method", "op" => "in", "value" => ["GET"] }
+                ] }],
+      slo_rules: [{ "namespace" => "web", "threshold_ms" => 20 }]
+    )
+    request = { "code.namespace" => "UsersController", "code.function" => "index", "http.method" => "GET",
+                "url.path" => "/users" }
+
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 500))
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 200)) { sleep 0.05 }
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 200))
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 200))
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 500, "url.path" => "/admin"))
+    finish_request_trace(provider, attributes: request.merge("http.status_code" => 500, "http.method" => "POST"))
+
+    assert_equal SUCCESS, provider.force_flush(timeout: 1)
+    blobs = remote.spans.group_by(&:trace_id).map { |trace_id, spans| Flare::TraceBlob.build(trace_id: trace_id, spans: spans).to_h }
+    assert_equal %w[baseline baseline error], blobs.map { |blob| blob["capture_reason"] }.sort,
+                 "the slow 200 is a baseline, not a failure, and requests outside the filters are dropped"
+    assert blobs.all? { |blob| blob["trace_rule_id"] == 7 && blob["spans"].length == 2 }
+  end
+
   def test_without_key_local_always_on_behavior_is_unchanged
     Flare.configuration.key = nil
     refute Flare.configuration.tracing_submission_configured?

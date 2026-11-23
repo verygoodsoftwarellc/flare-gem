@@ -12,7 +12,7 @@ module Flare
   #   {
   #     "trace_id":       "<hex>",
   #     "trace_rule_id":  <int|nil>,
-  #     "capture_reason": "slow"|"error"|nil,
+  #     "capture_reason": "slow"|"error"|"baseline"|"match"|nil,
   #     "root_name":      "<string>",
   #     "started_at":     "<iso8601>",
   #     "duration_ms":    <int>,
@@ -26,7 +26,7 @@ module Flare
   # `flare.rule_id` attribute (Path 1 sets it on the sampled root, Path 2
   # sets it on the rack owner span via WebMarkerSubscriber). capture_reason
   # comes from `flare.capture_reason`, which FilteringSpanProcessor sets when
-  # a failures-only rule keeps the trace.
+  # a judged rule keeps the trace.
   class TraceBlob
     ZERO_SPAN_ID = ("\x00".b * 8).freeze
     ROOT_NAME_LIMIT = 255
