@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "concurrent/atomic/atomic_fixnum"
 require "concurrent/atomic/atomic_reference"
 
 module Flare
@@ -15,11 +16,10 @@ module Flare
   # Fork-safe: after_fork clears the pool so child processes don't reuse
   # parent URLs (each child polls its own copy from /api/rules anyway).
   class UploadUrlPool
-    attr_reader :checkouts, :empty_count, :expired_count
+    attr_reader :empty_count, :expired_count
 
     def initialize
       @entries_ref   = Concurrent::AtomicReference.new([].freeze)
-      @checkouts     = Concurrent::AtomicFixnum.new(0)
       @empty_count   = Concurrent::AtomicFixnum.new(0)
       @expired_count = Concurrent::AtomicFixnum.new(0)
     end
@@ -47,7 +47,6 @@ module Flare
           next # try the next one
         end
 
-        @checkouts.increment
         return candidate
       end
     end
@@ -62,18 +61,6 @@ module Flare
 
     def clear
       @entries_ref.set([].freeze)
-    end
-
-    # Drop URLs that have already passed their expires_at. Cheap; safe to
-    # call from RuleManager's scheduler in between polls.
-    def sweep
-      now = Time.now
-      current = @entries_ref.get
-      live    = current.reject { |e| expired?(e, now) }
-      return 0 if live.length == current.length
-
-      @entries_ref.set(live.freeze)
-      current.length - live.length
     end
 
     # Call from Flare.after_fork. Parent's URLs aren't usable from the

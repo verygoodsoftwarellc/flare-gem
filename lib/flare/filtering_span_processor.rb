@@ -4,6 +4,8 @@ require "concurrent/atomic/atomic_fixnum"
 require "logger"
 require "opentelemetry/sdk"
 
+require_relative "deadline"
+
 module Flare
   # BSP-shaped span processor whose filter is `sampled OR marked` instead
   # of BSP's `sampled` (BSP early-returns on RECORD_ONLY spans -- our
@@ -17,6 +19,7 @@ module Flare
   class FilteringSpanProcessor
     SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
     FAILURE = OpenTelemetry::SDK::Trace::Export::FAILURE
+    TIMEOUT = OpenTelemetry::SDK::Trace::Export::TIMEOUT
 
     DEFAULT_MAX_QUEUE = 5_000
     DEFAULT_FLUSH_INTERVAL = 5      # seconds
@@ -47,6 +50,10 @@ module Flare
       @mutex            = Mutex.new
       @cond             = ConditionVariable.new
       @stopped          = false
+      @active_exports   = 0
+      @export_completion_sequence = 0
+      @last_export_result = SUCCESS
+      @flush_owner      = nil
       @pid              = $$
 
       @dropped_count       = Concurrent::AtomicFixnum.new(0)
@@ -75,22 +82,55 @@ module Flare
         complete: owner_finished || sampled_completion_span?(span_data),
         delay: owner_finished ? @marked_trace_grace_period : 0
       )
+    rescue StandardError => e
+      # The SDK calls processors without a rescue, so a bug here would raise
+      # into the app's request or job. Count every failure, warn once
+      # per process (keyed by pid so forked workers still warn).
+      @exception_count.increment
+      return if @on_finish_error_warned_pid == $$
+
+      @on_finish_error_warned_pid = $$
+      @logger.warn("[Flare::FilteringSpanProcessor] on_finish failed: #{e.class}: #{e.message}")
     end
 
     def force_flush(timeout: nil)
-      drain_and_export(include_pending: true)
-      SUCCESS
+      detect_forking
+      deadline = Deadline.new(timeout)
+      return TIMEOUT unless begin_flush(deadline)
+      prior_result = @flush_prior_result
+
+      batch = snapshot_for_flush(deadline)
+      return TIMEOUT unless batch
+
+      operation = start_flush_export(batch, deadline)
+      result = wait_for_flush_export(operation, deadline)
+      [prior_result, result].max
+    ensure
+      finish_flush if @flush_owner == Thread.current
     end
 
     def shutdown(timeout: nil)
-      @mutex.synchronize do
+      detect_forking
+      deadline = Deadline.new(timeout)
+      return TIMEOUT unless lock_before_deadline(deadline)
+
+      begin
         @stopped = true
         @cond.broadcast
+      ensure
+        @mutex.unlock
       end
-      @worker.join(timeout || 5)
-      drain_and_export(include_pending: true)
-      @exporter.shutdown(timeout: timeout) if @exporter.respond_to?(:shutdown)
-      SUCCESS
+      @worker.join(deadline.remaining || 5)
+      return TIMEOUT if @worker.alive? || deadline.expired?
+
+      result = force_flush(timeout: deadline.remaining)
+      return result unless result == SUCCESS
+      return TIMEOUT if deadline.expired?
+
+      exporter_result = @exporter.shutdown(timeout: deadline.remaining) if @exporter.respond_to?(:shutdown)
+      return TIMEOUT if deadline.expired?
+
+      exporter_result || SUCCESS
     end
 
     def buffer_size
@@ -105,6 +145,8 @@ module Flare
 
     def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do
+        return if @stopped
+
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
         @pending_by_trace[trace_id] ||= []
@@ -124,7 +166,8 @@ module Flare
       until stopped?
         @mutex.synchronize do
           timeout = next_wait_timeout
-          @cond.wait(@mutex, timeout) if @ready_queue.empty? && !@stopped
+          waiting_for_export = @flush_owner || @active_exports.positive?
+          @cond.wait(@mutex, timeout) if (@ready_queue.empty? || waiting_for_export) && !@stopped
         end
         drain_and_export
       end
@@ -134,30 +177,141 @@ module Flare
       @mutex.synchronize { @stopped }
     end
 
-    def drain_and_export(include_pending: false)
+    def drain_and_export
       batch = nil
       @mutex.synchronize do
         promote_due_delayed_traces
+        return if @ready_queue.empty? || @flush_owner || @active_exports.positive?
 
-        if include_pending
-          @ready_queue.concat(@pending_by_trace.values.flatten)
-          @pending_by_trace.clear
-          @trace_order.clear
-          @pending_count = 0
-          unmark_delayed_traces
-          @delayed_ready_by_trace.clear
-        end
-
-        return if @ready_queue.empty?
         batch = @ready_queue
         @ready_queue = []
+        @active_exports += 1
       end
 
-      result = @exporter.export(batch, timeout: @export_timeout)
+      result = export_batch(batch, timeout: @export_timeout)
+    ensure
+      export_finished(result || FAILURE) if batch
+    end
+
+    def begin_flush(deadline)
+      return false unless lock_before_deadline(deadline)
+
+      begin
+        initial_sequence = @export_completion_sequence
+        while @flush_owner && @flush_owner != Thread.current
+          return false if deadline.expired?
+
+          @cond.wait(@mutex, deadline.remaining)
+        end
+        @flush_owner = Thread.current
+
+        while @active_exports.positive?
+          return false if deadline.expired?
+
+          @cond.wait(@mutex, deadline.remaining)
+        end
+        @flush_prior_result = if @export_completion_sequence > initial_sequence
+          @last_export_result
+        else
+          SUCCESS
+        end
+      ensure
+        @mutex.unlock
+      end
+      true
+    end
+
+    def finish_flush
+      @mutex.synchronize do
+        @flush_owner = nil
+        @cond.broadcast
+      end
+    end
+
+    def snapshot_for_flush(deadline)
+      return unless lock_before_deadline(deadline)
+
+      begin
+        @ready_queue.concat(@pending_by_trace.values.flatten)
+        @pending_by_trace.clear
+        @trace_order.clear
+        @pending_count = 0
+        unmark_delayed_traces
+        @delayed_ready_by_trace.clear
+        batch = @ready_queue
+        @ready_queue = []
+        batch
+      ensure
+        @mutex.unlock
+      end
+    end
+
+    def start_flush_export(batch, deadline)
+      operation = { done: false, result: nil }
+      @mutex.synchronize { @active_exports += 1 }
+      Thread.new do
+        result = batch.empty? ? SUCCESS : export_batch(batch, timeout: deadline.remaining)
+        if result == SUCCESS && !deadline.expired? && @exporter.respond_to?(:force_flush)
+          result = @exporter.force_flush(timeout: deadline.remaining)
+        end
+        result = TIMEOUT if deadline.expired?
+        operation[:result] = result
+      rescue StandardError => e
+        @exception_count.increment
+        @logger.warn("[Flare::FilteringSpanProcessor] force flush failed: #{e.class}: #{e.message}")
+        operation[:result] = FAILURE
+      ensure
+        @mutex.synchronize do
+          operation[:done] = true
+          complete_export(operation[:result])
+        end
+      end
+      operation
+    end
+
+    def wait_for_flush_export(operation, deadline)
+      @mutex.synchronize do
+        until operation[:done]
+          return TIMEOUT if deadline.expired?
+
+          @cond.wait(@mutex, deadline.remaining)
+        end
+      end
+      operation[:result]
+    end
+
+    def export_batch(batch, timeout:)
+      result = @exporter.export(batch, timeout: timeout)
       @failed_export_count.increment if result != SUCCESS
+      result
     rescue StandardError => e
       @exception_count.increment
       @logger.warn("[Flare::FilteringSpanProcessor] export failed: #{e.class}: #{e.message}")
+      FAILURE
+    end
+
+    def export_finished(result)
+      @mutex.synchronize do
+        complete_export(result)
+      end
+    end
+
+    def complete_export(result)
+      @active_exports -= 1
+      @export_completion_sequence += 1
+      @last_export_result = result || FAILURE
+      @cond.broadcast
+    end
+
+    def lock_before_deadline(deadline)
+      return @mutex.lock unless deadline.remaining
+
+      until @mutex.try_lock
+        return false if deadline.expired?
+
+        sleep([deadline.remaining, 0.001].min)
+      end
+      true
     end
 
     def mark_trace_ready(trace_id)
@@ -180,6 +334,9 @@ module Flare
       now = monotonic_now
       ready_trace_ids = @delayed_ready_by_trace.select { |_, ready_at| ready_at <= now }.keys
       ready_trace_ids.each do |trace_id|
+        # Overflow may have evicted the whole batch, so mark_trace_ready
+        # would not clear the entry and next_wait_timeout would return 0 forever.
+        @delayed_ready_by_trace.delete(trace_id)
         mark_trace_ready(trace_id)
         @marker.unmark(trace_id)
       end
@@ -255,18 +412,25 @@ module Flare
     def detect_forking
       return if @pid == $$
 
-      @mutex.synchronize do
-        return if @pid == $$
-
-        @pid = $$
-        @pending_by_trace.clear
-        @trace_order.clear
-        @ready_queue.clear
-        @delayed_ready_by_trace.clear
-        @pending_count = 0
-        @stopped = false
-        start_worker
-      end
+      # The child only retains the forking thread. Replace synchronization
+      # objects so it cannot inherit locks or active-export bookkeeping owned
+      # by vanished threads.
+      @pid = $$
+      @mutex = Mutex.new
+      @cond = ConditionVariable.new
+      @pending_by_trace = {}
+      @trace_order = []
+      @ready_queue = []
+      @delayed_ready_by_trace = {}
+      @pending_count = 0
+      @active_exports = 0
+      @export_completion_sequence = 0
+      @last_export_result = SUCCESS
+      @flush_prior_result = SUCCESS
+      @flush_owner = nil
+      @stopped = false
+      @worker = nil
+      start_worker
     end
 
     def start_worker

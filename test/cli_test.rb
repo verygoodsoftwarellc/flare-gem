@@ -180,10 +180,69 @@ class SetupCommandGitignoreTest < Minitest::Test
     refute_includes out, "Added"
   end
 
+  def test_skips_env_when_a_new_rails_app_already_ignores_it
+    File.write(File.join(@dir, ".gitignore"), "/.env*\nflare.sqlite3*\n")
+
+    cmd = Flare::SetupCommand.new
+    cmd.instance_variable_set(:@saved_to_dotenv, true)
+    capture_io { cmd.send(:add_gitignore_entries) }
+
+    assert_equal "/.env*\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+  end
+
+  # Setup skips auth when FLARE_KEY is already in .env, but that .env holds
+  # the key all the same.
+  def test_adds_env_when_the_key_is_already_in_it
+    File.write(File.join(@dir, ".gitignore"), "/tmp\n")
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=existing_key\n")
+
+    out, = capture_io { Flare::SetupCommand.new.send(:add_gitignore_entries) }
+
+    assert_equal "/tmp\n.env\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+    assert_includes out, "Added .env, flare.sqlite3*"
+  end
+
+  def test_leaves_env_alone_when_the_key_is_not_in_it
+    File.write(File.join(@dir, ".gitignore"), "/tmp\n")
+    File.write(File.join(@dir, ".env"), "OTHER_VAR=hello\nFLARE_KEY=\n")
+
+    capture_io { Flare::SetupCommand.new.send(:add_gitignore_entries) }
+
+    assert_equal "/tmp\nflare.sqlite3*\n", File.read(File.join(@dir, ".gitignore"))
+  end
+
   def test_does_nothing_without_gitignore
     cmd = Flare::SetupCommand.new(force: false)
     out, = capture_io { cmd.send(:add_gitignore_entries) }
     assert_empty out
+  end
+end
+
+class SetupCommandTokenPromptTest < Minitest::Test
+  def test_closed_stdin_shows_the_token_instead_of_asking_forever
+    output = answering("") { Flare::SetupCommand.new(force: false).send(:save_token, "tok_123") }
+
+    assert_includes output, "FLARE_KEY=tok_123"
+    assert_equal 1, output.scan("Choose (1/2/3)").size
+    refute_includes output, "Invalid choice"
+  end
+
+  def test_an_invalid_choice_still_asks_again
+    output = answering("9\n3\n") { Flare::SetupCommand.new(force: false).send(:save_token, "tok_123") }
+
+    assert_includes output, "Invalid choice."
+    assert_includes output, "FLARE_KEY=tok_123"
+    assert_equal 2, output.scan("Choose (1/2/3)").size
+  end
+
+  private
+
+  def answering(input)
+    stdin = $stdin
+    $stdin = StringIO.new(input)
+    capture_io { yield }.first
+  ensure
+    $stdin = stdin
   end
 end
 
@@ -287,6 +346,70 @@ class DoctorCommandTest < Minitest::Test
     assert_includes out, "FLARE_KEY configured"
     assert_includes out, ".gitignore entries present"
     assert_includes out, "looks good"
+  end
+
+  # The rule a new Rails app's .gitignore has.
+  def test_accepts_env_rule_from_a_new_rails_app
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.env*\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
+    refute_includes out, ".gitignore missing"
+  end
+
+  def test_warns_when_env_holds_the_key_and_is_not_ignored
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.environment\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore missing: .env"
+  end
+
+  def test_warns_when_a_later_rule_stops_ignoring_env
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/.env*\n!.env\nflare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore missing: .env"
+  end
+
+  # Setup only adds .env when the key is in it, so it couldn't fix these.
+  def test_does_not_ask_for_env_rule_without_an_env_file
+    File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
+  end
+
+  def test_does_not_ask_for_env_rule_when_the_key_is_not_in_env
+    File.write(File.join(@dir, ".env"), "OTHER_VAR=hello\n")
+    File.write(File.join(@dir, ".gitignore"), "flare.sqlite3*\n")
+
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes out, ".gitignore entries present"
+  end
+
+  # The key was put in .env by hand, so setup skips auth. Doctor should agree
+  # afterwards instead of sending people back to setup.
+  def test_passes_after_setup_with_the_key_already_in_env
+    File.write(File.join(@dir, ".env"), "FLARE_KEY=test_key\n")
+    File.write(File.join(@dir, ".gitignore"), "/log\n")
+    FileUtils.mkdir_p(File.join(@dir, "db"))
+
+    no_clients = Flare::AIClientsSetup.new(host: "https://flare.am", env: { "PATH" => "" }, home: @dir)
+    setup_out, = capture_io { Flare::SetupCommand.new(ai_clients: no_clients).run }
+    out, = capture_io { Flare::DoctorCommand.new.run }
+
+    assert_includes setup_out, "skipping auth"
+    assert_includes setup_out, "No AI clients found"
+    assert_includes out, ".gitignore entries present"
+    assert_includes out, "Everything looks good!"
   end
 
   def test_missing_initializer
@@ -437,6 +560,25 @@ class StatusCommandTest < Minitest::Test
     assert_includes out, "not configured"
   end
 
+  def test_shows_key_may_be_in_credentials
+    FileUtils.mkdir_p(File.join(@dir, "config"))
+    File.write(File.join(@dir, "config/credentials.yml.enc"), "encrypted")
+
+    out, = capture_io { Flare::StatusCommand.new.run }
+
+    assert_includes out, "may be in Rails credentials"
+    refute_includes out, "not configured"
+  end
+
+  def test_shows_key_may_be_in_environment_credentials
+    FileUtils.mkdir_p(File.join(@dir, "config/credentials"))
+    File.write(File.join(@dir, "config/credentials/development.yml.enc"), "encrypted")
+
+    out, = capture_io { Flare::StatusCommand.new.run }
+
+    assert_includes out, "may be in Rails credentials"
+  end
+
   def test_shows_file_statuses
     FileUtils.mkdir_p(File.join(@dir, "config/initializers"))
     File.write(File.join(@dir, "config/initializers/flare.rb"), "# config")
@@ -460,5 +602,158 @@ class StatusCommandTest < Minitest::Test
     cmd = Flare::StatusCommand.new
     out, = capture_io { cmd.run }
     assert_includes out, "https://flare.am"
+  end
+end
+
+class SetupCommandCallbackTest < Minitest::Test
+  STATE = "expected-state"
+
+  def setup
+    @server = TCPServer.new("127.0.0.1", 0)
+    @port = @server.addr[1]
+    @cmd = Flare::SetupCommand.new(force: false)
+  end
+
+  def teardown
+    @server.close unless @server.closed?
+  end
+
+  def test_returns_code_from_valid_callback
+    assert_equal "good-code", wait_for_code { send_request("/callback?state=#{STATE}&code=good-code") }
+  end
+
+  {
+    wrong_state: "/callback?state=wrong&code=other",
+    error_without_matching_state: "/callback?error=access_denied",
+    missing_code: "/callback?state=#{STATE}",
+    unparseable_path: "/callback?a=b|c"
+  }.each do |name, path|
+    define_method("test_keeps_waiting_after_#{name}") do
+      code = wait_for_code do
+        send_request(path)
+        send_request("/callback?state=#{STATE}&code=good-code")
+      end
+      assert_equal "good-code", code
+    end
+  end
+
+  def test_keeps_waiting_after_connection_that_sends_nothing
+    code = wait_for_code do
+      silent = TCPSocket.new("127.0.0.1", @port)
+      begin
+        response = send_request("/callback?state=#{STATE}&code=good-code")
+        assert_includes response.to_s, "Authorized!"
+      ensure
+        silent.close
+      end
+    end
+    assert_equal "good-code", code
+  end
+
+  def test_stops_on_error_callback_with_matching_state
+    error = assert_raises(Flare::SetupCommand::AuthorizationDenied) do
+      wait_for_code { send_request("/callback?state=#{STATE}&error=access_denied") }
+    end
+    assert_equal "access_denied", error.message
+  end
+
+  private
+
+  def wait_for_code(timeout: 10)
+    result = nil
+    waiter = Thread.new { result = @cmd.send(:wait_for_callback, @server, STATE, timeout) }
+    waiter.report_on_exception = false
+    yield
+    assert waiter.join(timeout + 2), "wait_for_callback did not return"
+    result
+  ensure
+    waiter&.kill
+  end
+
+  def send_request(path)
+    socket = TCPSocket.new("127.0.0.1", @port)
+    socket.write("GET #{path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    socket.read if IO.select([socket], nil, nil, 5)
+  ensure
+    socket&.close
+  end
+end
+
+class SetupCommandExchangeTest < Minitest::Test
+  def setup
+    @host = ENV["FLARE_HOST"]
+  end
+
+  def teardown
+    @host ? ENV["FLARE_HOST"] = @host : ENV.delete("FLARE_HOST")
+  end
+
+  def test_returns_the_token
+    assert_equal "tok_123", exchange_with_response('{"token":"tok_123"}').first
+  end
+
+  def test_explains_a_refused_connection
+    server = TCPServer.new("127.0.0.1", 0)
+    port = server.addr[1]
+    server.close
+    ENV["FLARE_HOST"] = "http://127.0.0.1:#{port}"
+
+    assert_exits_with_retry_hint(exchange)
+  end
+
+  def test_explains_a_response_that_is_not_json
+    _, err = exchange_with_response("<html>Bad gateway</html>")
+    assert_exits_with_retry_hint(err)
+  end
+
+  def test_explains_a_malformed_response_header
+    _, err = exchange_with_response('{"token":"tok_123"}', content_length: "abc")
+    assert_exits_with_retry_hint(err)
+  end
+
+  def test_reports_json_without_a_token_object
+    token, err = exchange_with_response("[]")
+    assert_nil token
+    assert_includes err, "No token received"
+  end
+
+  private
+
+  def exchange
+    _, err = capture_io do
+      assert_raises(SystemExit) { Flare::SetupCommand.new(force: false).send(:exchange_code, "code", "verifier") }
+    end
+    err
+  end
+
+  def assert_exits_with_retry_hint(err)
+    assert_includes err, "Couldn't finish signing in to Flare"
+    assert_includes err, "flare setup"
+  end
+
+  # Answers one request with 200 and the body, then returns [token, stderr];
+  # token is nil when setup exited.
+  def exchange_with_response(body, content_length: body.bytesize)
+    server = TCPServer.new("127.0.0.1", 0)
+    ENV["FLARE_HOST"] = "http://127.0.0.1:#{server.addr[1]}"
+    responder = Thread.new do
+      client = server.accept
+      while (line = client.gets) && line != "\r\n"
+        length = line[/\AContent-Length: (\d+)/i, 1]&.to_i || length
+      end
+      client.read(length.to_i)
+      client.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: #{content_length}\r\nConnection: close\r\n\r\n#{body}")
+      client.close
+    end
+
+    token = nil
+    _, err = capture_io do
+      token = Flare::SetupCommand.new(force: false).send(:exchange_code, "code", "verifier")
+    rescue SystemExit
+    end
+    [token, err]
+  ensure
+    server&.close
+    responder&.join(5)
   end
 end

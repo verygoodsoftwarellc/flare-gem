@@ -124,6 +124,42 @@ class TraceExporterTest < Minitest::Test
     assert_equal 1, @exporter.notify_failure_count.value
   end
 
+  def test_transport_error_on_one_trace_still_ships_the_rest_of_the_batch
+    @pool.replace([upload("u1"), upload("u2")])
+    @transport.responses_for(:put) << Net::ReadTimeout.new
+    @transport.responses_for(:post) << http(202)
+
+    result = @exporter.export([span("a", trace: "t1"), span("b", trace: "t2")])
+
+    assert_equal FAILURE, result
+    assert_equal ["https://r2/put/u1", "https://r2/put/u2"], @transport.calls(:put).map { |c| c[:url] }
+    assert_equal 1, @transport.calls(:post).length
+    assert_equal 1, @exporter.exception_count.value
+  end
+
+  def test_unserializable_trace_does_not_use_up_an_upload_url
+    @pool.replace([upload("u1")])
+    @transport.responses_for(:post) << http(202)
+    bad = span("a", trace: "t1")
+    bad.attributes = { "ratio" => Float::NAN }
+
+    result = @exporter.export([bad, span("b", trace: "t2")])
+
+    assert_equal FAILURE, result
+    assert_equal ["https://r2/put/u1"], @transport.calls(:put).map { |c| c[:url] }
+    assert_equal 1, @transport.calls(:post).length
+    assert_equal 1, @exporter.exception_count.value
+  end
+
+  def test_empty_pool_skips_encoding
+    unencodable = span("a", trace: "t1")
+    unencodable.attributes = { "ratio" => Float::NAN }
+
+    assert_equal FAILURE, @exporter.export([unencodable])
+    assert_equal 1, @exporter.pool_empty_count.value
+    assert_equal 0, @exporter.exception_count.value
+  end
+
   def test_handles_no_spans_as_success
     assert_equal SUCCESS, @exporter.export([])
   end
@@ -131,6 +167,16 @@ class TraceExporterTest < Minitest::Test
   def test_force_flush_and_shutdown_succeed
     assert_equal SUCCESS, @exporter.force_flush
     assert_equal SUCCESS, @exporter.shutdown
+  end
+
+  def test_passes_one_remaining_timeout_through_put_and_notify
+    @pool.replace([upload("u1")])
+    @transport.responses_for(:put) << http(200)
+    @transport.responses_for(:post) << http(202)
+
+    assert_equal SUCCESS, @exporter.export([span("a", trace: "t1")], timeout: 0.5)
+    assert_operator @transport.calls(:put).first[:timeout], :<=, 0.5
+    assert_operator @transport.calls(:post).first[:timeout], :<, @transport.calls(:put).first[:timeout]
   end
 
   private
@@ -166,12 +212,12 @@ class TraceExporterTest < Minitest::Test
       @calls     = Hash.new { |h, k| h[k] = [] }
     end
 
-    def put(url, body, headers)
-      record(:put, url, body, headers)
+    def put(url, body, headers, timeout: nil)
+      record(:put, url, body, headers, timeout)
     end
 
-    def post(url, body, headers)
-      record(:post, url, body, headers)
+    def post(url, body, headers, timeout: nil)
+      record(:post, url, body, headers, timeout)
     end
 
     def responses_for(method) = @responses[method]
@@ -179,9 +225,12 @@ class TraceExporterTest < Minitest::Test
 
     private
 
-    def record(method, url, body, headers)
-      @calls[method] << { url: url, body: body, headers: headers }
-      @responses[method].shift || Flare::HttpTransport::Response.new(code: "200", body: "")
+    def record(method, url, body, headers, timeout)
+      @calls[method] << { url: url, body: body, headers: headers, timeout: timeout }
+      response = @responses[method].shift || Flare::HttpTransport::Response.new(code: "200", body: "")
+      raise response if response.is_a?(Exception)
+
+      response
     end
   end
 end

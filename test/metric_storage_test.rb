@@ -119,6 +119,27 @@ class MetricStorageTest < Minitest::Test
     assert_equal 10, @storage.size
   end
 
+  def test_forked_child_does_not_drain_inherited_metrics
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    reader, writer = IO.pipe
+
+    pid = fork do
+      reader.close
+      writer.write(@storage.drain.size.to_s)
+      writer.close
+      exit!
+    end
+    writer.close
+    Process.wait(pid)
+
+    assert_equal "0", reader.read
+    assert_equal 1, @storage.size
+  ensure
+    reader&.close
+    writer&.close unless writer&.closed?
+  end
+
   private
 
   def create_key(namespace, service, target, operation)

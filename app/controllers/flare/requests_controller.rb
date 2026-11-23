@@ -17,7 +17,7 @@ module Flare
         origin: current_origin
       }
       # Fetch one extra to know if there's a next page
-      requests = Flare.storage.list_requests(**filter_params, limit: PER_PAGE + 1, offset: @offset)
+      requests = Flare.storage.list_requests(**filter_params, sort: params[:sort], limit: PER_PAGE + 1, offset: @offset)
       @total_count = Flare.storage.count_requests(**filter_params)
       @has_next = requests.size > PER_PAGE
       @requests = requests.first(PER_PAGE)

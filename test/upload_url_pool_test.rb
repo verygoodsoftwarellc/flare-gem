@@ -57,19 +57,6 @@ class UploadUrlPoolTest < Minitest::Test
     assert_equal 1, @pool.size
   end
 
-  def test_sweep_drops_expired_entries
-    @pool.replace([
-      entry("expired", expires_at: Time.now - 60),
-      entry("fresh",   expires_at: Time.now + 60)
-    ])
-
-    dropped = @pool.sweep
-
-    assert_equal 1, dropped
-    assert_equal 1, @pool.size
-    assert_equal "fresh", @pool.checkout[:upload_id]
-  end
-
   def test_after_fork_clears_the_pool
     @pool.replace([entry("u1"), entry("u2")])
     @pool.after_fork

@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
   spec.summary = "Light up what's slowing you down"
   spec.description = "App monitoring for Rails. Captures requests, queries, jobs, cache, views, HTTP calls, mail, and exceptions with a waterfall visualization dashboard."
-  spec.homepage = "https://github.com/jnunemaker/flare"
+  spec.homepage = "https://github.com/verygoodsoftwarellc/flare-gem"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
@@ -18,7 +18,9 @@ Gem::Specification.new do |spec|
 
   spec.metadata["homepage_uri"] = "https://flare.am"
   spec.metadata["source_code_uri"] = spec.homepage
-  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/master/CHANGELOG.md"
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/releases"
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
+  spec.metadata["documentation_uri"] = "#{spec.homepage}#readme"
 
   spec.files = Dir.chdir(__dir__) do
     Dir["{app,config,exe,lib,public}/**/*", "CHANGELOG.md", "LICENSE.txt", "README.md"].reject { |f| File.directory?(f) }
@@ -31,11 +33,13 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activesupport", ">= 7.0"
   spec.add_dependency "actionpack", ">= 7.0"
   spec.add_dependency "concurrent-ruby", ">= 1.1"
-  spec.add_dependency "opentelemetry-sdk"
-  spec.add_dependency "opentelemetry-instrumentation-rack"
-  spec.add_dependency "opentelemetry-instrumentation-net_http"
-  spec.add_dependency "opentelemetry-instrumentation-active_support"
-  spec.add_dependency "opentelemetry-instrumentation-action_pack"
-  spec.add_dependency "opentelemetry-instrumentation-action_view"
-  spec.add_dependency "opentelemetry-instrumentation-active_job"
+  # Floors are the oldest versions CI installs (the Ruby 3.0 rows). The
+  # pre-1.0 instrumentation gems stay below 1.0 until Flare is tested on it.
+  spec.add_dependency "opentelemetry-sdk", "~> 1.7"
+  spec.add_dependency "opentelemetry-instrumentation-rack", "~> 0.25"
+  spec.add_dependency "opentelemetry-instrumentation-net_http", "~> 0.22"
+  spec.add_dependency "opentelemetry-instrumentation-active_support", "~> 0.7"
+  spec.add_dependency "opentelemetry-instrumentation-action_pack", "~> 0.10"
+  spec.add_dependency "opentelemetry-instrumentation-action_view", "~> 0.8"
+  spec.add_dependency "opentelemetry-instrumentation-active_job", "~> 0.7"
 end

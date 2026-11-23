@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
 require_relative "output"
+require_relative "project"
 
 module Flare
   class DoctorCommand
     include CLI::Output
+    include CLI::Project
 
     def run
       puts bold("Flare Doctor")
@@ -62,7 +64,7 @@ module Flare
 
       contents = File.read(gitignore_path)
       missing = []
-      missing << ".env" unless contents.match?(/^\.env$/)
+      missing << ".env" if key_in_dotenv? && !env_ignored?(contents)
       missing << "flare.sqlite3*" unless contents.include?("flare.sqlite3")
 
       if missing.empty?
@@ -99,16 +101,7 @@ module Flare
     end
 
     def key_configured?
-      return true if ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?
-
-      env_path = File.join(Dir.pwd, ".env")
-      File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
-    end
-
-    def credentials_exist?
-      %w[config/credentials.yml.enc config/credentials/production.yml.enc].any? do |path|
-        File.exist?(File.join(Dir.pwd, path))
-      end
+      (ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?) || key_in_dotenv?
     end
 
     def spans_expected?

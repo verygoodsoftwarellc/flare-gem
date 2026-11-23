@@ -1,7 +1,10 @@
 # frozen_string_literal: true
 
+require "active_support/inflector/methods"
 require_relative "metric_key"
 require_relative "http_metrics_config"
+require_relative "sql_mask"
+require_relative "store_statement"
 
 module Flare
   TRANSACTION_NAME_ATTRIBUTE = "flare.transaction_name" unless const_defined?(:TRANSACTION_NAME_ATTRIBUTE)
@@ -9,12 +12,16 @@ module Flare
   # OpenTelemetry SpanProcessor that extracts metrics from spans.
   # Aggregates counts, durations, and error rates by namespace/service/target/operation.
   class MetricSpanProcessor
+    MAX_METRIC_STATEMENT_BYTES = 4_096
+
     # Standard OTel span kind symbols
     SERVER = :server
     CLIENT = :client
     CONSUMER = :consumer
 
-    # Cache store class name patterns mapped to short service names
+    # Cache store name patterns mapped to short service names. Patterns are
+    # matched against the downcased store name, which is usually a class name
+    # with no underscores (SolidCache::Store is "solidcache::store").
     CACHE_STORE_MAP = {
       "redis" => "redis",
       "mem_cache" => "memcache",
@@ -23,12 +30,27 @@ module Flare
       "file" => "file",
       "memory" => "memory",
       "null" => "null",
-      "solid_cache" => "solid_cache"
+      "solid_cache" => "solid_cache",
+      "solidcache" => "solid_cache"
     }.freeze
 
-    def initialize(storage:, http_metrics_config: nil, slo_manager: nil)
+    ACTIVE_JOB_ERROR_STATUS = /\AUnexpected ActiveJob Error (\S+)\z/
+
+    # Where a statement names the table it writes, by its first word. Every
+    # other statement is named for the table it reads FROM.
+    INTO_TABLE = /\bINTO\s+[`"]?(\w+)[`"]?/i
+    WRITE_TABLES = {
+      "INSERT" => INTO_TABLE,
+      "REPLACE" => INTO_TABLE,
+      "MERGE" => INTO_TABLE,
+      "UPDATE" => /\bUPDATE\s+[`"]?(\w+)[`"]?/i
+    }.freeze
+    READ_TABLE = /\bFROM\s+[`"]?(\w+)[`"]?/i
+
+    def initialize(storage:, http_metrics_config: nil, ignore_errors: nil, slo_manager: nil)
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
+      @ignore_errors = ignore_errors || []
       @slo_manager = slo_manager
       @pid = $$
     end
@@ -56,6 +78,14 @@ module Flare
       elsif view_span?(span)
         record_view_metric(span)
       end
+    rescue StandardError => e
+      # The SDK calls processors without a rescue, so a bug here would raise
+      # into the app's request or job. Warn once per process so it can't
+      # flood the logs (keyed by pid so forked workers still warn).
+      return if @on_finish_error_warned_pid == $$
+
+      @on_finish_error_warned_pid = $$
+      warn "[Flare::MetricSpanProcessor] on_finish failed: #{e.class}: #{e.message}"
     end
 
     def force_flush(timeout: nil)
@@ -179,13 +209,21 @@ module Flare
 
     def record_db_metric(span)
       db_system = span.attributes["db.system"].to_s
+      # Read the table and operation from the statement without its values, so
+      # the words in a string literal can't become the metric's name. This runs on
+      # the request thread and needs only the start of a statement, and a literal
+      # the cut lands in is masked like any unterminated one.
+      raw_statement = span.attributes["db.statement"]
+      if raw_statement && SqlMask.sql_system?(db_system)
+        statement = SqlMask.mask(raw_statement.to_s.byteslice(0, MAX_METRIC_STATEMENT_BYTES), db_system)
+      end
 
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "db",
         service: db_system,
-        target: extract_db_target(span, db_system),
-        operation: extract_db_operation(span, db_system)
+        target: extract_db_target(span, db_system, statement),
+        operation: extract_db_operation(span, db_system, statement)
       )
 
       @storage.increment(
@@ -201,17 +239,18 @@ module Flare
              span.attributes["net.peer.name"] ||
              extract_host_from_url(span) ||
              "unknown"
+      host = host.to_s.sub(/\A.*@/m, "").downcase
 
       method = span.attributes["http.method"] ||
                span.attributes["http.request.method"] ||
                "UNKNOWN"
 
-      path = resolve_http_path(span, host.to_s.downcase)
+      path = resolve_http_path(span, host)
 
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "http",
-        service: host.to_s.downcase,
+        service: host,
         target: "#{method.to_s.upcase} #{path}",
         operation: http_status_class(span)
       )
@@ -267,9 +306,14 @@ module Flare
       ((span.end_timestamp - span.start_timestamp) / 1_000_000.0).round
     end
 
+    # A 5xx is an error. So is a request that raised before any response
+    # (a timeout, a dropped connection): it has no status code, only an error
+    # span status. 4xx responses also carry an error span status, so the
+    # span status only counts when there was no response at all.
     def http_error?(span)
       status = span.attributes["http.status_code"] || span.attributes["http.response.status_code"]
-      status.to_i >= 500
+      code = status.to_i
+      code >= 500 || (code.zero? && span_error?(span))
     end
 
     def http_status_class(span)
@@ -285,7 +329,26 @@ module Flare
     end
 
     def span_error?(span)
-      span.status&.code == OpenTelemetry::Trace::Status::ERROR
+      return false if span.status&.code != OpenTelemetry::Trace::Status::ERROR
+      return true if @ignore_errors.empty?
+
+      type = exception_type(span)
+      type.nil? || !ignored_exception_type?(type)
+    end
+
+    # A job's retried exception is recorded on its enqueue_retry child span,
+    # so the process span only names it in the status description.
+    def exception_type(span)
+      event = span.events&.reverse_each&.find { |e| e.name == "exception" }
+      event&.attributes&.[]("exception.type") ||
+        span.status.description.to_s[ACTIVE_JOB_ERROR_STATUS, 1]
+    end
+
+    # Subclasses of an ignored class match when the class is loaded.
+    def ignored_exception_type?(type)
+      klass = ActiveSupport::Inflector.safe_constantize(type)
+      names = klass.is_a?(Class) ? klass.ancestors.map(&:name) : [type]
+      names.any? { |name| @ignore_errors.include?(name) }
     end
 
     def extract_job_system(span)
@@ -301,57 +364,67 @@ module Flare
       end
     end
 
-    def extract_db_target(span, db_system)
-      case db_system
-      when "redis"
+    def extract_db_target(span, db_system, statement)
+      if StoreStatement.redis_system?(db_system)
         # For Redis, use db.redis.namespace if available, or the database index
         span.attributes["db.redis.database_index"]&.to_s ||
           span.attributes["db.name"] ||
           "default"
       else
-        # For SQL databases, prefer table name from attributes or parsed from SQL
+        # Prefer the table name from attributes. Only SQL statements are parsed
+        # for one; statement is nil for anything else.
         span.attributes["db.sql.table"] ||
-          extract_sql_table(span) ||
+          span.attributes["db.mongodb.collection"] ||
+          span.attributes["db.collection.name"] ||
+          extract_sql_table(statement) ||
           span.attributes["db.name"] ||
           "unknown"
       end
     end
 
-    def extract_db_operation(span, db_system)
-      case db_system
-      when "redis"
-        span.attributes["db.operation"]&.to_s&.downcase ||
-          span.name.to_s.split.last&.downcase ||
-          "command"
+    def extract_db_operation(span, db_system, statement)
+      operation = SqlMask.operation_word(span.attributes["db.operation"])
+
+      if StoreStatement.redis_system?(db_system)
+        (operation || SqlMask.operation_word(span.name.to_s.split.last))&.downcase || "query"
       else
-        span.attributes["db.operation"]&.to_s&.upcase ||
-          extract_sql_operation(span) ||
-          "query"
+        # The first word of a masked statement (SELECT, INSERT, UPDATE, etc.)
+        word = statement ? first_word(statement) : SqlMask.command_word(span.attributes["db.statement"])
+        (operation || word)&.upcase || "query"
       end
     end
 
-    def extract_sql_operation(span)
-      statement = span.attributes["db.statement"]
+    # The table the statement works on: an INSERT's INTO, an UPDATE's own
+    # table, otherwise the first FROM outside parentheses, so an upsert's
+    # "IS NOT DISTINCT FROM excluded.x" or a subquery in the select list can't
+    # name it. With no FROM outside parentheses (SELECT COUNT(*) FROM
+    # (SELECT ...)), and for a WITH, the first one anywhere counts.
+    def extract_sql_table(statement)
       return nil unless statement
 
-      # Extract first word (SELECT, INSERT, UPDATE, DELETE, etc.)
-      statement.to_s.strip.split(/\s+/).first&.upcase
+      word = first_word(statement)&.upcase
+      pattern = WRITE_TABLES.fetch(word, READ_TABLE)
+      return statement[pattern, 1] if word == "WITH"
+
+      scanner = StringScanner.new(statement)
+      first = nil
+      depth = 0
+      counted = 0
+      while scanner.skip_until(pattern)
+        # Masked SQL has no parentheses inside values. Count only the text
+        # since the last match, so a long statement is read once.
+        between = statement.byteslice(counted, scanner.pos - scanner.matched_size - counted)
+        depth += between.count("(") - between.count(")")
+        return scanner[1] if depth <= 0
+
+        first ||= scanner[1]
+        counted = scanner.pos
+      end
+      first
     end
 
-    def extract_sql_table(span)
-      statement = span.attributes["db.statement"]
-      return nil unless statement
-
-      sql = statement.to_s.strip
-
-      case sql
-      when /\bFROM\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bINTO\s+[`"]?(\w+)[`"]?/i
-        $1
-      when /\bUPDATE\s+[`"]?(\w+)[`"]?/i
-        $1
-      end
+    def first_word(statement)
+      statement[/\S+/]
     end
 
     def extract_host_from_url(span)
@@ -383,7 +456,7 @@ module Flare
       path = span.attributes["http.target"] ||
              span.attributes["url.path"] ||
              extract_path_from_url(span)
-      path&.to_s&.split("?")&.first || "/"
+      path&.to_s&.split(/[?#]/)&.first || "/"
     end
 
     # Normalize URL paths to prevent cardinality explosion.
@@ -405,8 +478,8 @@ module Flare
         when /\A[0-9a-f]{24}\z/i
           # MongoDB ObjectId: /items/507f1f77bcf86cd799439011 -> /items/:id
           ":id"
-        when /\A[0-9a-f]{32,}\z/i
-          # Long hex strings (tokens, hashes): -> :token
+        when /\A[0-9a-f]{32,}\z/i, /[^@]@/
+          # Long hex strings (tokens, hashes), or anything shaped like user@host: -> :token
           ":token"
         else
           segment

@@ -4,6 +4,7 @@ require_relative "test_helper"
 require "flare/metric_key"
 require "flare/metric_storage"
 require "flare/metric_flusher"
+require "flare/metric_submitter"
 
 class MetricFlusherTest < Minitest::Test
   def setup
@@ -96,13 +97,48 @@ class MetricFlusherTest < Minitest::Test
     assert @submitter.submit_count >= 1
   end
 
-  def test_after_fork_keeps_running
+  def test_after_fork_in_child_restarts_once
     @flusher.start
     assert @flusher.running?
+    old_timer = @flusher.instance_variable_get(:@timer)
+    old_pool = @flusher.instance_variable_get(:@pool)
+    old_map = @storage.instance_variable_get(:@storage)
+    # simulate being in a forked child
+    @flusher.instance_variable_set(:@pid, $$ + 1)
+    @storage.instance_variable_set(:@pid, $$ + 1)
 
     @flusher.after_fork
 
     assert @flusher.running?
+    new_timer = @flusher.instance_variable_get(:@timer)
+    refute_same old_timer, new_timer
+    refute_same old_map, @storage.instance_variable_get(:@storage)
+
+    @flusher.after_fork
+
+    assert_same new_timer, @flusher.instance_variable_get(:@timer)
+  ensure
+    old_timer&.shutdown
+    old_pool&.shutdown
+  end
+
+  def test_after_fork_in_same_process_is_a_noop
+    @flusher.start
+    timer = @flusher.instance_variable_get(:@timer)
+    pool = @flusher.instance_variable_get(:@pool)
+    mutex = @flusher.instance_variable_get(:@submission_mutex)
+    condition = @flusher.instance_variable_get(:@submission_condition)
+
+    @flusher.after_fork
+
+    assert_same timer, @flusher.instance_variable_get(:@timer)
+    assert_same mutex, @flusher.instance_variable_get(:@submission_mutex)
+    assert_same condition, @flusher.instance_variable_get(:@submission_condition)
+  ensure
+    unless timer.equal?(@flusher.instance_variable_get(:@timer))
+      timer&.shutdown
+      pool&.shutdown
+    end
   end
 
   def test_flush_now_handles_nil_storage
@@ -119,6 +155,108 @@ class MetricFlusherTest < Minitest::Test
     assert_equal 0, count
   end
 
+  def test_force_flush_waits_for_background_submission
+    submitter = BlockingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 0.01)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    flusher.start
+    submitter.wait_until_started
+    Thread.new { sleep 0.02; submitter.release }
+
+    result = flusher.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS, result
+  ensure
+    submitter&.release
+    flusher&.stop
+  end
+
+  def test_force_flush_times_out_for_background_submission
+    submitter = BlockingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 0.01)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    flusher.start
+    submitter.wait_until_started
+
+    result = flusher.force_flush(timeout: 0.02)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+  ensure
+    submitter&.release
+    flusher&.stop
+  end
+
+  def test_force_flush_clears_inherited_submission_state_after_fork
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: @submitter, interval: 60)
+    flusher.instance_variable_set(:@pending_submissions, 1)
+    reader, writer = IO.pipe
+
+    pid = fork do
+      reader.close
+      writer.write(flusher.force_flush(timeout: 0.1).to_s)
+      writer.close
+      exit!
+    end
+    writer.close
+    Process.wait(pid)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS.to_s, reader.read
+  ensure
+    reader&.close
+    writer&.close unless writer&.closed?
+    flusher.instance_variable_set(:@pending_submissions, 0) if flusher
+    flusher&.stop
+  end
+
+  def test_force_flush_is_bounded_when_submitter_ignores_timeout
+    submitter = BlockingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = flusher.force_flush(timeout: 0.02)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+    assert_operator elapsed, :<, 0.1
+  ensure
+    submitter&.release
+    flusher&.stop
+  end
+
+  def test_after_fork_during_synchronous_flush_does_not_strand_the_flush
+    submitter = ForkSignallingSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    submitter.flusher = flusher
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    result = flusher.force_flush(timeout: 2)
+
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+    assert_equal OpenTelemetry::SDK::Trace::Export::SUCCESS, result
+    assert_operator elapsed, :<, 1
+  ensure
+    flusher&.stop
+  end
+
+  def test_force_flush_maps_deadline_submission_error_to_timeout
+    submitter = DeadlineSubmitter.new
+    flusher = Flare::MetricFlusher.new(storage: @storage, submitter: submitter, interval: 60)
+    key = create_key("web", "rails", "UsersController", "show")
+    @storage.increment(key, duration_ms: 100, error: false)
+
+    result = flusher.force_flush(timeout: 1)
+
+    assert_equal OpenTelemetry::SDK::Trace::Export::TIMEOUT, result
+  ensure
+    flusher&.stop
+  end
+
   private
 
   def create_key(namespace, service, target, operation)
@@ -132,6 +270,15 @@ class MetricFlusherTest < Minitest::Test
   end
 
   # Mock submitter for testing
+  class ForkSignallingSubmitter
+    attr_accessor :flusher
+
+    def submit(drained)
+      @flusher.after_fork
+      [drained.size, nil]
+    end
+  end
+
   class MockSubmitter
     attr_reader :submit_count, :submitted_data
 
@@ -161,6 +308,41 @@ class MetricFlusherTest < Minitest::Test
     def record(storage)
       @record_count += 1
       storage.add(@key, count: 1, sum_ms: 0)
+    end
+  end
+
+  class BlockingSubmitter
+    def initialize
+      @mutex = Mutex.new
+      @condition = ConditionVariable.new
+      @started = false
+      @released = false
+    end
+
+    def submit(drained, timeout: nil)
+      @mutex.synchronize do
+        @started = true
+        @condition.broadcast
+        @condition.wait(@mutex) until @released
+      end
+      [drained.size, nil]
+    end
+
+    def wait_until_started
+      @mutex.synchronize { @condition.wait(@mutex) until @started }
+    end
+
+    def release
+      @mutex.synchronize do
+        @released = true
+        @condition.broadcast
+      end
+    end
+  end
+
+  class DeadlineSubmitter
+    def submit(_drained, timeout: nil)
+      [0, Flare::MetricSubmitter::DeadlineExceeded.new("deadline")]
     end
   end
 end

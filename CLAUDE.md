@@ -98,7 +98,7 @@ The `Flare::Engine` runs initializers in a specific order:
 2. `flare.static_assets` - serves `/flare-assets` from engine's `public/` directory
 3. `flare.opentelemetry` (before `build_middleware_stack`) - configures OTel SDK and instrumentations so Rack/ActionPack middleware gets inserted
 4. `flare.routes` (before `add_routing_paths`) - auto-mounts engine at `/flare` in development/test
-5. `config.after_initialize` - starts the `MetricFlusher` (after user initializers have run so config is applied)
+5. `config.after_initialize` - subscribes to any `subscribe_patterns` the app's initializers added, and starts the `MetricFlusher` (after user initializers have run so config is applied)
 
 ## OTel Instrumentations
 
@@ -118,9 +118,11 @@ Users instrument their code with `ActiveSupport::Notifications.instrument("app.w
 
 ## CLI
 
-`exe/flare` - entry point. Commands: `setup`, `version`, `help`.
+`exe/flare` - entry point. Commands: `setup`, `doctor`, `status`, `requests`, `request`, `nplus1`, `version`, `help`.
 
 `--force` flag on setup re-runs auth even if `FLARE_KEY` exists in `.env`.
+
+`requests`, `request` and `nplus1` read the local spans database read-only and take `--json` and `--db PATH`; `requests` and `nplus1` also take `--last N` (default 10).
 
 ## Development
 
@@ -147,12 +149,18 @@ Tests use Minitest. The test helper loads core library classes directly without 
 - `lib/flare/configuration.rb` - all config options and environment defaults
 - `lib/flare/cli.rb` - CLI command router
 - `lib/flare/cli/setup_command.rb` - setup/auth flow
+- `lib/flare/cli/doctor_command.rb`, `status_command.rb` - setup checks and current configuration
+- `lib/flare/cli/requests_command.rb`, `request_command.rb`, `nplus1_command.rb` - read local spans from the terminal (shared options in `local_spans.rb`)
 - `lib/flare/sqlite_exporter.rb` - OTel span exporter that writes to SQLite
 - `lib/flare/http_metrics_config.rb` - per-host HTTP path allow/map DSL for metrics cardinality control
 - `lib/flare/metric_span_processor.rb` - OTel span processor that extracts metrics
 - `lib/flare/metric_storage.rb` - thread-safe in-memory metric aggregation
 - `lib/flare/metric_flusher.rb` - background timer that drains and submits metrics
 - `lib/flare/metric_submitter.rb` - HTTP client for posting metrics to flare-web
+- `lib/flare/export_filter.rb` - filter_parameters and SQL masking for exported traces
+- `lib/flare/sql_mask.rb` - one-pass scan that takes the values out of a SQL statement
+- `lib/flare/store_statement.rb` - shape of Redis and MongoDB statements with values taken out
+- `lib/flare/redis_statement_processor.rb` - applies that shape to Redis spans as they start
 - `lib/flare/source_location.rb` - finds app code location that triggered a span
 - `app/` - Rails engine controllers/views for the dashboard UI
 - `config/routes.rb` - engine routes (requests, jobs, spans by category)

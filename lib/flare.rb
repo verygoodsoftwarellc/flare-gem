@@ -10,9 +10,12 @@ require_relative "flare/source_location"
 require_relative "flare/metric_key"
 require_relative "flare/metric_storage"
 require_relative "flare/metric_span_processor"
+require_relative "flare/redis_statement_processor"
 require_relative "flare/metric_flusher"
 require_relative "flare/backoff_policy"
 require_relative "flare/metric_submitter"
+require_relative "flare/recording_batch_span_processor"
+require_relative "flare/lifecycle"
 
 require_relative "flare/slo_manager"
 require_relative "flare/sampler"
@@ -89,7 +92,7 @@ module Flare
   end
 
   def span_processor
-    @span_processor ||= OpenTelemetry::SDK::Trace::Export::BatchSpanProcessor.new(
+    @span_processor ||= RecordingBatchSpanProcessor.new(
       exporter,
       max_queue_size: 1000,
       max_export_batch_size: 100,
@@ -188,7 +191,11 @@ module Flare
     require "opentelemetry-instrumentation-rack"
     require "opentelemetry-instrumentation-net_http"
     require "opentelemetry-instrumentation-active_support"
-    require "opentelemetry/instrumentation/active_support/span_subscriber"
+    begin
+      # Internal OTel path; subscribe_to_notifications handles it moving.
+      require "opentelemetry/instrumentation/active_support/span_subscriber"
+    rescue LoadError
+    end
     require "opentelemetry-instrumentation-action_pack" if defined?(ActionController)
     require "opentelemetry-instrumentation-action_view" if defined?(ActionView)
     require "opentelemetry-instrumentation-active_job" if defined?(ActiveJob)
@@ -201,6 +208,9 @@ module Flare
 
     OpenTelemetry::SDK.configure do |c|
       c.service_name = service_name
+
+      # Reads Redis statements as spans start, so raw arguments don't reach a finished span.
+      c.add_span_processor(RedisStatementProcessor.new)
 
       # Spans: detailed trace data stored in SQLite
       if configuration.spans_enabled && exporter
@@ -215,10 +225,17 @@ module Flare
         "OpenTelemetry::Instrumentation::Rack" => {
           untraced_requests: ->(env) {
             request = Rack::Request.new(env)
-            return true if request.path.start_with?("/flare")
+            # Skip Flare's own dashboard and assets, not app routes like /flares.
+            path = request.path
+            return true if path == "/flare" || path.start_with?("/flare/", "/flare-assets/")
 
             configuration.ignore_request.call(request)
           }
+        },
+        # The key is what groups Redis calls. RedisStatementProcessor reduces the
+        # statement to the command and the key's first segment.
+        "OpenTelemetry::Instrumentation::Redis" => {
+          db_statement: :include,
         },
         # Name Sidekiq job spans after the worker class (e.g. "MyWorker
         # process") instead of the upstream default of the queue name
@@ -237,20 +254,7 @@ module Flare
       subscribe_to_notifications
     end
 
-    at_exit do
-      log "Shutting down..."
-      if configuration.spans_enabled && @span_processor
-        span_processor.force_flush
-        span_processor.shutdown
-        log "Span processor flushed and stopped"
-      end
-      if @trace_span_processor
-        @trace_span_processor.force_flush
-        @trace_span_processor.shutdown
-        log "Trace span processor flushed and stopped"
-      end
-      log "Shutdown complete"
-    end
+    install_shutdown_hook
 
     @otel_configured = true
   end
@@ -280,7 +284,7 @@ module Flare
     @rule_manager.start
     log "Rule manager started (poll=#{configuration.tracing_poll_interval}s)"
 
-    at_exit { @rule_manager&.stop }
+    install_shutdown_hook
   end
 
   def setup_tracing_components
@@ -346,6 +350,7 @@ module Flare
     metric_processor = MetricSpanProcessor.new(
       storage: @metric_storage,
       http_metrics_config: configuration.http_metrics_config,
+      ignore_errors: configuration.ignore_errors,
       slo_manager: slo_manager
     )
     OpenTelemetry.tracer_provider.add_span_processor(metric_processor)
@@ -366,7 +371,7 @@ module Flare
       @metric_flusher.start
       log "Metrics flusher started (interval=#{configuration.metrics_flush_interval}s)"
 
-      at_exit { @metric_flusher&.stop }
+      install_shutdown_hook
     else
       log "Metrics submission not configured (missing url or key)"
     end
@@ -432,6 +437,10 @@ module Flare
   }.freeze
 
   def subscribe_to_notifications
+    unless OpenTelemetry::Instrumentation::ActiveSupport.respond_to?(:subscribe)
+      return warn "[Flare] OpenTelemetry::Instrumentation::ActiveSupport.subscribe not found. SQL, cache, mailer and custom notification spans are disabled. Check your opentelemetry-instrumentation-active_support version."
+    end
+
     NOTIFICATION_TRANSFORMERS.each do |pattern, transformer|
       OpenTelemetry::Instrumentation::ActiveSupport.subscribe(tracer, pattern, transformer)
     rescue
@@ -440,11 +449,18 @@ module Flare
 
     # Auto-subscribe to custom patterns (default: "app.*")
     # This lets users just do: ActiveSupport::Notifications.instrument("app.whatever") { }
+    @subscribed_patterns = []
     subscribe_to_custom_patterns
   end
 
+  # Runs again after the app's initializers, which Rails loads after
+  # configure_opentelemetry, for any prefixes they added. Each prefix is
+  # subscribed once.
   def subscribe_to_custom_patterns
-    configuration.subscribe_patterns.each do |prefix|
+    return unless @subscribed_patterns
+
+    (configuration.subscribe_patterns.uniq - @subscribed_patterns).each do |prefix|
+      @subscribed_patterns << prefix
       # Subscribe to all notifications starting with this prefix
       pattern = /\A#{Regexp.escape(prefix)}/
       default_transformer = ->(payload) {

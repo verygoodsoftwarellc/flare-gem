@@ -1,11 +1,13 @@
 # frozen_string_literal: true
 
 require_relative "output"
+require_relative "project"
 require_relative "../version"
 
 module Flare
   class StatusCommand
     include CLI::Output
+    include CLI::Project
 
     def run
       puts bold("Flare v#{VERSION}")
@@ -30,9 +32,10 @@ module Flare
       if ENV["FLARE_KEY"] && !ENV["FLARE_KEY"].empty?
         green("set via ENV")
       else
-        env_path = File.join(Dir.pwd, ".env")
-        if File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+        if key_in_dotenv?
           green("set in .env")
+        elsif credentials_exist?
+          dim("not in ENV or .env (may be in Rails credentials)")
         else
           red("not configured")
         end

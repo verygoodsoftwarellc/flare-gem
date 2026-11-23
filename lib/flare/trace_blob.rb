@@ -2,6 +2,9 @@
 
 require "time"
 
+require_relative "export_filter"
+require_relative "utf8"
+
 module Flare
   # Value object that turns a group of OTel span_data for a single trace
   # into the Flare-JSON wire format the server expects:
@@ -33,18 +36,19 @@ module Flare
     def initialize(trace_id:, spans:)
       @trace_id = trace_id
       @spans    = spans
+      @filter   = ExportFilter.current
     end
 
     def to_h
       root = find_root
-      {
+      UTF8.scrub({
         "trace_id"      => hexify(@trace_id),
         "trace_rule_id" => rule_id_from_spans,
         "root_name"     => root_name(root),
         "started_at"    => iso(root&.start_timestamp),
         "duration_ms"   => duration_ms(root),
         "spans"         => @spans.map { |s| span_to_h(s) }
-      }
+      })
     end
 
     private
@@ -84,17 +88,17 @@ module Flare
     end
 
     def root_name(root)
-      root&.name&.to_s&.slice(0, ROOT_NAME_LIMIT)
+      @filter.name(root&.name&.to_s)&.slice(0, ROOT_NAME_LIMIT)
     end
 
     def span_to_h(span)
       {
         "id"          => hexify(span.span_id),
         "parent_id"   => root?(span) ? nil : hexify(span.parent_span_id),
-        "name"        => span.name,
+        "name"        => @filter.name(span.name),
         "started_at"  => iso(span.start_timestamp),
         "duration_ms" => duration_ms(span),
-        "attributes"  => span.attributes || {}
+        "attributes"  => @filter.attributes(span.attributes)
       }
     end
 
