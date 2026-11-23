@@ -174,11 +174,7 @@ module Flare
     # following the trace, so spans that finish later are dropped too.
     def discard_trace(trace_id)
       @mutex.synchronize do
-        batch = @pending_by_trace.delete(trace_id)
-        if batch
-          @trace_order.delete(trace_id)
-          @pending_count -= batch.length
-        end
+        take_pending(trace_id)
         @delayed_ready_by_trace.delete(trace_id)
       end
       @marker.unmark(trace_id)
@@ -362,14 +358,22 @@ module Flare
     end
 
     def mark_trace_ready(trace_id)
+      batch = take_pending(trace_id)
+      return unless batch
+
+      @delayed_ready_by_trace.delete(trace_id)
+      @ready_queue.concat(batch)
+      @cond.signal
+    end
+
+    # Removes a trace's buffered spans and returns them. Caller holds @mutex.
+    def take_pending(trace_id)
       batch = @pending_by_trace.delete(trace_id)
       return unless batch
 
       @trace_order.delete(trace_id)
-      @delayed_ready_by_trace.delete(trace_id)
       @pending_count -= batch.length
-      @ready_queue.concat(batch)
-      @cond.signal
+      batch
     end
 
     def delay_trace_ready(trace_id, delay)

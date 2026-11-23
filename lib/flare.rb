@@ -323,12 +323,7 @@ module Flare
       exporter: @trace_exporter,
       marker: @marker,
       sampler: @sampler,
-      slo_check: MetricSpanProcessor.new(
-        storage: nil,
-        http_metrics_config: configuration.http_metrics_config,
-        ignore_errors: configuration.ignore_errors,
-        slo_manager: slo_manager
-      ),
+      slo_check: metric_span_processor(nil),
       max_queue: configuration.tracing_max_queue
     )
     OpenTelemetry.tracer_provider.add_span_processor(@trace_span_processor)
@@ -348,19 +343,25 @@ module Flare
     log "Tracing enabled (poll=#{configuration.tracing_poll_interval}s)"
   end
 
+  # Metrics and the failures-only trace check both judge spans with these
+  # settings, so a trace is kept exactly when its request counts as failing.
+  # The trace check passes nil storage: it only calls slo_failure.
+  def metric_span_processor(storage)
+    MetricSpanProcessor.new(
+      storage: storage,
+      http_metrics_config: configuration.http_metrics_config,
+      ignore_errors: configuration.ignore_errors,
+      slo_manager: slo_manager
+    )
+  end
+
   # Start the metrics flusher. Called from config.after_initialize so
   # user configuration (metrics_enabled, flush_interval, etc.) is applied.
   def start_metrics_flusher
     return unless configuration.metrics_enabled
 
     @metric_storage ||= MetricStorage.new
-    metric_processor = MetricSpanProcessor.new(
-      storage: @metric_storage,
-      http_metrics_config: configuration.http_metrics_config,
-      ignore_errors: configuration.ignore_errors,
-      slo_manager: slo_manager
-    )
-    OpenTelemetry.tracer_provider.add_span_processor(metric_processor)
+    OpenTelemetry.tracer_provider.add_span_processor(metric_span_processor(@metric_storage))
 
     log "Metrics enabled (endpoint=#{configuration.url} key=#{configuration.key ? 'present' : 'missing'})"
 
