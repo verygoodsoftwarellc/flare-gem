@@ -10,8 +10,6 @@ class SloManagerTest < Minitest::Test
 
   def test_empty_by_default_returns_nil
     assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
-    assert_equal({}, @manager.defaults)
-    assert_equal({}, @manager.overrides)
   end
 
   def test_namespace_only_rule_is_the_default
@@ -68,9 +66,10 @@ class SloManagerTest < Minitest::Test
       "not a hash"
     ])
 
-    assert_equal({ "web" => 1000 }, @manager.defaults)
     assert_equal 250, @manager.threshold_for(namespace: "web", service: "rails", target: "Good#ok")
-    assert_equal 1, @manager.overrides.size
+    # The partial and threshold-less rules were dropped, so these fall back to the default.
+    assert_equal 1000, @manager.threshold_for(namespace: "web", service: "rails", target: "Other#index")
+    assert_equal 1000, @manager.threshold_for(namespace: "web", service: "rails", target: "NoThreshold#x")
   end
 
   def test_non_positive_thresholds_dropped
@@ -79,7 +78,7 @@ class SloManagerTest < Minitest::Test
       { "namespace" => "web", "service" => "rails", "target" => "X#y", "threshold_ms" => -5 }
     ])
 
-    assert_equal({}, @manager.defaults)
+    assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "Other#index")
     assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
   end
 
@@ -93,7 +92,6 @@ class SloManagerTest < Minitest::Test
     @manager.update([{ "namespace" => "web", "threshold_ms" => 1000 }])
     @manager.update(nil)
 
-    assert_equal({}, @manager.defaults)
     assert_nil @manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
   end
 

@@ -4,9 +4,9 @@ require "concurrent/atomic/atomic_reference"
 
 module Flare
   # Holds the latency SLO thresholds delivered by the server in the `slo_rules`
-  # array of GET /api/rules. MetricSpanProcessor asks threshold_for at every
-  # web/job span end to decide whether the operation was "too slow" -- the
-  # latency SLI counterpart to error_count.
+  # array of GET /api/rules. MetricSpanProcessor asks slow? at every web/job
+  # span end to decide whether the operation was "too slow" -- the latency SLI
+  # counterpart to error_count.
   #
   # The wire shape is a flat array of rules, each { namespace, service?, target?,
   # threshold_ms }:
@@ -15,7 +15,7 @@ module Flare
   # Internally these split into a defaults hash (keyed by namespace) and an
   # overrides hash (keyed by [namespace, service, target]).
   #
-  # Precedence in threshold_for: exact override -> namespace default -> nil.
+  # Precedence: exact override -> namespace default -> nil.
   # nil means "untracked" -- the processor records no slow_count for it.
   #
   # The whole config is swapped atomically (like Sampler#update_rules) so a
@@ -62,8 +62,7 @@ module Flare
     # Returns the threshold in integer milliseconds for this operation, or nil
     # when the operation is untracked (no override and no namespace default).
     def threshold_for(namespace:, service:, target:)
-      config = @config_ref.get
-      config.overrides[[namespace, service, target]] || config.defaults[namespace]
+      lookup(@config_ref.get, namespace, service, target)
     end
 
     # Latency SLI predicate: true when the operation exceeded its SLO threshold
@@ -72,23 +71,18 @@ module Flare
     def slow?(namespace:, service:, target:, duration_ms:, error:)
       return false if error
 
-      # Common case: no SLOs configured. Bail before allocating the lookup key.
-      config = @config_ref.get
-      return false if config.overrides.empty? && config.defaults.empty?
-
-      threshold = config.overrides[[namespace, service, target]] || config.defaults[namespace]
+      threshold = lookup(@config_ref.get, namespace, service, target)
       !threshold.nil? && duration_ms > threshold
     end
 
-    def defaults
-      @config_ref.get.defaults
-    end
-
-    def overrides
-      @config_ref.get.overrides
-    end
-
     private
+
+    # Skips the override lookup, and the Array key it allocates, when there are
+    # no overrides: the common case is namespace defaults only, or no SLOs.
+    def lookup(config, namespace, service, target)
+      threshold = config.overrides[[namespace, service, target]] unless config.overrides.empty?
+      threshold || config.defaults[namespace]
+    end
 
     def stringify(value)
       return nil if value.nil?

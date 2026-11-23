@@ -2,6 +2,7 @@
 
 require "active_support/inflector/methods"
 require_relative "metric_key"
+require_relative "slo_manager"
 require_relative "http_metrics_config"
 require_relative "sql_mask"
 require_relative "store_statement"
@@ -51,7 +52,7 @@ module Flare
       @storage = storage
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
       @ignore_errors = ignore_errors || []
-      @slo_manager = slo_manager
+      @slo_manager = slo_manager || SloManager.new
       @pid = $$
     end
 
@@ -165,46 +166,37 @@ module Flare
         target = action ? "#{controller}##{action}" : controller
       end
 
-      service = "rails"
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "web",
-        service: service,
+        service: "rails",
         target: target,
         operation: http_status_class(span)
       )
 
-      duration = duration_ms(span)
-      error = http_error?(span)
-      @storage.increment(
-        key,
-        duration_ms: duration,
-        error: error,
-        slow: @slo_manager&.slow?(namespace: "web", service: service, target: target, duration_ms: duration, error: error)
-      )
+      increment_with_slo(key, duration_ms: duration_ms(span), error: http_error?(span))
     end
 
     def record_background_metric(span)
       transaction_name = span.attributes[Flare::TRANSACTION_NAME_ATTRIBUTE]
 
-      service = extract_job_system(span)
-      target = transaction_name || span.attributes["code.namespace"] || span.attributes["messaging.sidekiq.job_class"] || span.attributes["messaging.destination"] || "unknown"
       key = MetricKey.new(
         bucket: bucket_time(span),
         namespace: "job",
-        service: service,
-        target: target,
+        service: extract_job_system(span),
+        target: transaction_name || span.attributes["code.namespace"] || span.attributes["messaging.sidekiq.job_class"] || span.attributes["messaging.destination"] || "unknown",
         operation: transaction_name ? "perform" : (span.attributes["code.function"] || span.name)
       )
 
-      duration = duration_ms(span)
-      error = span_error?(span)
-      @storage.increment(
-        key,
-        duration_ms: duration,
-        error: error,
-        slow: @slo_manager&.slow?(namespace: "job", service: service, target: target, duration_ms: duration, error: error)
-      )
+      increment_with_slo(key, duration_ms: duration_ms(span), error: span_error?(span))
+    end
+
+    # Web and job entry points also count toward the latency SLO: slow means
+    # over the operation's threshold without erroring.
+    def increment_with_slo(key, duration_ms:, error:)
+      slow = @slo_manager.slow?(namespace: key.namespace, service: key.service, target: key.target,
+                                duration_ms: duration_ms, error: error)
+      @storage.increment(key, duration_ms: duration_ms, error: error, slow: slow)
     end
 
     def record_db_metric(span)

@@ -43,7 +43,8 @@ class RuleManagerTest < Minitest::Test
 
     @manager.poll_now
 
-    assert_equal({ "web" => 1000, "job" => 60000 }, @slo_manager.defaults)
+    assert_equal 1000, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "Other#index")
+    assert_equal 60000, @slo_manager.threshold_for(namespace: "job", service: "sidekiq", target: "MyJob")
     assert_equal 250, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "FeedsController#serve_feed")
   end
 
@@ -53,17 +54,7 @@ class RuleManagerTest < Minitest::Test
     @transport.queue(ok({ "trace_rules" => [] }))
     @manager.poll_now
 
-    assert_equal({}, @slo_manager.defaults)
-  end
-
-  def test_slo_delivered_even_with_no_trace_rules
-    @transport.queue(
-      ok({ "trace_rules" => [], "slo_rules" => [{ "namespace" => "web", "threshold_ms" => 800 }] })
-    )
-
-    @manager.poll_now
-
-    assert_equal 800, @slo_manager.threshold_for(namespace: "web", service: "rails", target: "Any#thing")
+    assert_nil @slo_manager.threshold_for(namespace: "web", service: "rails", target: "X#y")
   end
 
   def test_200_updates_sampler_and_pool_and_stores_etag

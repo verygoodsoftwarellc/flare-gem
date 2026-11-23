@@ -134,8 +134,8 @@ module Flare
   def upload_url_pool = @upload_url_pool
   def rule_manager    = @rule_manager
 
-  # Shared latency-SLO config. Updated by RuleManager from the /api/rules `slo`
-  # section and read by MetricSpanProcessor to compute slow_count. Memoized so a
+  # Shared latency-SLO config. Updated by RuleManager from the /api/rules
+  # `slo_rules` array and read by MetricSpanProcessor to compute slow_count. Memoized so a
   # single instance is shared whether or not tracing submission is configured.
   def slo_manager
     @slo_manager ||= SloManager.new
