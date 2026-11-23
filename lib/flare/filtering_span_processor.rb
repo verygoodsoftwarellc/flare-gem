@@ -18,9 +18,11 @@ module Flare
   # for spans we don't export.
   #
   # A trace whose rule keeps only SLO failures is judged when its request
-  # ends (the span that completes it): a request that passed its SLO has
-  # its buffered spans dropped, and one that failed is exported with
-  # flare.capture_reason ("slow" or "error") on that span.
+  # ends, the owner span finishing: a request that passed its SLO has its
+  # buffered spans dropped, and one that failed is exported with
+  # flare.capture_reason ("slow" or "error") on that span. on_start marks a
+  # sampled root of such a rule, so a sampled request has an owner too, and
+  # a job or server span nested inside it (perform_now) doesn't end it.
   class FilteringSpanProcessor
     SUCCESS = OpenTelemetry::SDK::Trace::Export::SUCCESS
     FAILURE = OpenTelemetry::SDK::Trace::Export::FAILURE
@@ -75,7 +77,19 @@ module Flare
       start_worker
     end
 
-    def on_start(_span, _parent_context); end
+    def on_start(span, _parent_context)
+      return unless @sampler && @slo_check
+
+      ctx = span.context
+      return unless ctx&.trace_flags&.sampled? && root_span?(span)
+
+      rule_id = span.attributes&.[](Sampler::RULE_ID_ATTRIBUTE)
+      return unless @sampler.capture_slo_failures?(rule_id)
+
+      @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule_id)
+    rescue StandardError => e
+      callback_failed("on_start", e)
+    end
 
     def on_finish(span)
       detect_forking
@@ -90,7 +104,10 @@ module Flare
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
 
-      if complete && slo_failures_only?(ctx.trace_id, span_data, marked)
+      if complete && slo_failures_only?(ctx.trace_id, marked)
+        # Only the owner ends the request; a nested job or server span is part of it.
+        return enqueue(span_data, complete: false) unless owner_finished
+
         reason = @slo_check.slo_failure(span_data)
         return discard_trace(ctx.trace_id) unless reason
 
@@ -103,14 +120,7 @@ module Flare
         delay: owner_finished ? @marked_trace_grace_period : 0
       )
     rescue StandardError => e
-      # The SDK calls processors without a rescue, so a bug here would raise
-      # into the app's request or job. Count every failure, warn once
-      # per process (keyed by pid so forked workers still warn).
-      @exception_count.increment
-      return if @on_finish_error_warned_pid == $$
-
-      @on_finish_error_warned_pid = $$
-      @logger.warn("[Flare::FilteringSpanProcessor] on_finish failed: #{e.class}: #{e.message}")
+      callback_failed("on_finish", e)
     end
 
     def force_flush(timeout: nil)
@@ -163,11 +173,23 @@ module Flare
 
     private
 
-    def slo_failures_only?(trace_id, span_data, marked)
-      return false unless @sampler && @slo_check
+    # The SDK calls processors without a rescue, so a bug in a callback would
+    # raise into the app's request or job. Count every failure, warn once
+    # per process (keyed by pid so forked workers still warn).
+    def callback_failed(callback, error)
+      @exception_count.increment
+      return if @callback_error_warned_pid == $$
 
-      rule_id = marked ? @marker.rule_id(trace_id) : span_data.attributes&.[](Sampler::RULE_ID_ATTRIBUTE)
-      @sampler.capture_slo_failures?(rule_id)
+      @callback_error_warned_pid = $$
+      @logger.warn("[Flare::FilteringSpanProcessor] #{callback} failed: #{error.class}: #{error.message}")
+    end
+
+    # Failures-only traces are always marked: by WebMarkerSubscriber, or by
+    # on_start for a sampled root.
+    def slo_failures_only?(trace_id, marked)
+      return false unless marked && @sampler && @slo_check
+
+      @sampler.capture_slo_failures?(@marker.rule_id(trace_id))
     end
 
     # The request passed its SLO: drop what was buffered for it and stop

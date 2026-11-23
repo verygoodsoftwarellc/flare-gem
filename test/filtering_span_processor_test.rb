@@ -31,6 +31,18 @@ class FilteringSpanProcessorTest < Minitest::Test
     assert_equal 1, @processor.exception_count.value
   end
 
+def test_on_start_contains_errors_and_counts_them
+  processor = failures_only_processor(verdict: nil)
+  broken = Object.new
+  broken.define_singleton_method(:context) { raise ArgumentError, "boom" }
+
+  processor.on_start(broken, nil)
+
+  assert_equal 1, processor.exception_count.value
+ensure
+  processor&.shutdown(timeout: 1)
+end
+
   def test_finished_spans_after_shutdown_are_ignored
     @processor.shutdown(timeout: 1)
     @processor.on_finish(span(trace_id: "late", span_id: "late", sampled: true, parent_span_id: nil))
@@ -144,12 +156,31 @@ class FilteringSpanProcessorTest < Minitest::Test
     processor&.shutdown(timeout: 1)
   end
 
+# Regression: ISSUE-001 — a nested job or server span (perform_now) ended a
+# failures-only trace early, so slow requests were lost or passing ones uploaded
+# Found by /qa on 2026-11-23
+def test_failures_only_marked_trace_is_judged_at_its_owner_not_a_nested_job
+  processor = failures_only_processor(verdict: "slow")
+  @marker.mark("t1", owner_span_id: "rack", rule_id: 7)
+
+  processor.on_finish(span(trace_id: "t1", span_id: "job", sampled: false, parent_span_id: "rack", kind: :consumer))
+  processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+  processor.force_flush
+
+  assert_equal %w[rack], @slo_check.judged
+  assert_equal %w[job rack], @exporter.exports.flatten.map(&:span_id).sort
+ensure
+  processor&.shutdown(timeout: 1)
+end
+
   def test_failures_only_sampled_trace_is_judged_at_its_root
     processor = failures_only_processor(verdict: "error")
-    rule_attrs = { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 }
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
 
+    processor.on_start(root, nil)
     processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
-    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer, attributes: rule_attrs))
+    processor.on_finish(root)
     processor.force_flush
 
     exported = @exporter.exports.flatten.to_h { |s| [s.span_id, s] }
@@ -162,14 +193,17 @@ class FilteringSpanProcessorTest < Minitest::Test
 
   def test_failures_only_sampled_trace_that_passed_its_slo_is_dropped
     processor = failures_only_processor(verdict: nil)
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
 
+    processor.on_start(root, nil)
     processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
-    processor.on_finish(span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
-                             attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 }))
+    processor.on_finish(root)
     processor.force_flush
 
     assert_empty @exporter.exports.flatten
     assert_equal 0, processor.buffer_size
+    refute @marker.marked?("t1")
   ensure
     processor&.shutdown(timeout: 1)
   end
@@ -571,6 +605,9 @@ class FilteringSpanProcessorTest < Minitest::Test
 
     def context = @ctx
     def to_span_data = @data
+    # Like an SDK Span, readable in on_start before it becomes SpanData.
+    def parent_span_id = @data.parent_span_id
+    def attributes = @data.attributes
   end
 
   MockContext = Struct.new(:trace_id, :span_id, :trace_flags)

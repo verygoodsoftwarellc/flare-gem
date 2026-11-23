@@ -76,6 +76,27 @@ class TraceLifecycleIntegrationTest < Minitest::Test
     assert blobs.all? { |blob| blob["trace_rule_id"] == 7 && blob["spans"].length == 2 }
   end
 
+# Regression: ISSUE-001 — a job run inline (a nested consumer span) ended a
+# sampled failures-only trace early and uploaded part of a passing request
+# Found by /qa on 2026-11-23
+def test_failures_only_rule_judges_a_request_that_runs_a_job_inline_at_the_request
+  provider, remote = configured_provider(
+    rules: [{ "id" => 7, "match_attributes" => { "code.namespace" => "UsersController" }, "rate" => 1.0,
+              "capture" => "slo_failures" }],
+    slo_rules: [{ "namespace" => "web", "threshold_ms" => 20 }]
+  )
+  attributes = { "code.namespace" => "UsersController", "code.function" => "index", "http.status_code" => 200 }
+
+  finish_request_trace(provider, attributes: attributes) { run_job_inline(provider) }
+  finish_request_trace(provider, attributes: attributes) { run_job_inline(provider); sleep 0.05 }
+
+  assert_equal SUCCESS, provider.force_flush(timeout: 1)
+  blobs = remote.spans.group_by(&:trace_id).map { |trace_id, spans| Flare::TraceBlob.build(trace_id: trace_id, spans: spans).to_h }
+  assert_equal 1, blobs.length, "only the slow request is uploaded"
+  assert_equal "slow", blobs.first["capture_reason"]
+  assert_equal ["GET /users", "ReportJob perform", "sql.active_record"], blobs.first["spans"].map { |s| s["name"] }.sort
+end
+
   def test_without_key_local_always_on_behavior_is_unchanged
     Flare.configuration.key = nil
     refute Flare.configuration.tracing_submission_configured?
@@ -135,6 +156,10 @@ class TraceLifecycleIntegrationTest < Minitest::Test
       yield if block_given?
     end
   end
+
+def run_job_inline(provider)
+  provider.tracer("lifecycle-test").in_span("ReportJob perform", kind: :consumer) { nil }
+end
 
   def stored_span_names
     database = SQLite3::Database.new(@database_path)
