@@ -3,6 +3,8 @@
 require "concurrent/atomic/atomic_reference"
 require "opentelemetry/sdk"
 
+require_relative "trace_filter"
+
 module Flare
   # Path 1 trace sampler. At span start, iterates active rules; returns
   # RECORD_AND_SAMPLE when one matches and the deterministic trace_id_ratio
@@ -25,8 +27,29 @@ module Flare
     Result   = OpenTelemetry::SDK::Trace::Samplers::Result
 
     RULE_ID_ATTRIBUTE = "flare.rule_id"
+    CAPTURE_REASON_ATTRIBUTE = "flare.capture_reason"
 
-    Rule = Struct.new(:id, :match_attributes, :rate, keyword_init: true)
+    # What a rule keeps. FilteringSpanProcessor judges the request when it
+    # ends, for any rule that isn't all_requests or that has filters:
+    #   slo_failures: slow (over its operation's SLO threshold) or errored
+    #   errors:       errored only
+    #   all_requests: every request the sampler picks (that passes the filters)
+    # A missing or unknown value means all_requests, which is what servers
+    # that predate the field mean.
+    CAPTURE_ALL_REQUESTS = "all_requests"
+    CAPTURE_SLO_FAILURES = "slo_failures"
+    CAPTURE_ERRORS = "errors"
+    CAPTURES = [CAPTURE_ALL_REQUESTS, CAPTURE_SLO_FAILURES, CAPTURE_ERRORS].freeze
+
+    # baseline: the server wants a few requests that passed the verdict too,
+    # to compare against the failures. filters: TraceFilters, all of which a
+    # request must match to be kept.
+    Rule = Struct.new(:id, :match_attributes, :rate, :capture, :baseline, :filters, keyword_init: true) do
+      # True when the request has to finish before we know whether to keep it.
+      def judged?
+        capture != CAPTURE_ALL_REQUESTS || filters.any?
+      end
+    end
 
     attr_reader :dropped_rule_count
 
@@ -36,7 +59,7 @@ module Flare
     end
 
     # new_rules: an array of rule hashes from GET /api/rules, e.g.
-    #   [{ "id" => 1, "match_attributes" => {...}, "rate" => 0.5 }, ...]
+    #   [{ "id" => 1, "match_attributes" => {...}, "rate" => 0.5, "capture" => "slo_failures" }, ...]
     # Entries that don't validate are skipped (counted in dropped_rule_count).
     def update_rules(new_rules)
       validated = (new_rules || []).filter_map { |r| validate(r) }
@@ -46,6 +69,15 @@ module Flare
 
     def rules
       @rules_ref.get
+    end
+
+    # The rule with this id when its requests are judged at completion, else
+    # nil. Nil for an unknown id too (the rule expired mid-request), which
+    # keeps every request the trace already sampled, as all_requests does.
+    def judged_rule(rule_id)
+      return nil if rule_id.nil?
+
+      rules.find { |rule| rule.id == rule_id && rule.judged? }
     end
 
     def should_sample?(trace_id:, parent_context:, links:, name:, kind:, attributes:)
@@ -95,13 +127,31 @@ module Flare
       id    = raw["id"] || raw[:id]
       match = raw["match_attributes"] || raw[:match_attributes]
       rate  = raw["rate"] || raw[:rate]
+      capture = raw["capture"] || raw[:capture]
+      capture = CAPTURE_ALL_REQUESTS unless CAPTURES.include?(capture)
+      baseline = (raw["baseline"] || raw[:baseline]) == true
+      filters = raw.key?("filters") ? raw["filters"] : raw[:filters]
+      filters = [] if filters.nil?
 
       return nil if id.nil?
       return nil unless match.is_a?(Hash) && match.any?
       return nil unless match.all? { |k, v| k.is_a?(String) && v.is_a?(String) && !v.empty? }
       return nil unless rate.is_a?(Numeric) && rate > 0.0 && rate <= 1.0
+      return nil unless filters.is_a?(Array)
 
-      Rule.new(id: id, match_attributes: match, rate: rate.to_f)
+      # A filter this SDK can't read drops the whole rule: keeping requests
+      # the filter was meant to exclude would be worse than keeping none.
+      compiled = filters.map { |filter| TraceFilter.build(filter) }
+      return nil if compiled.any?(&:nil?)
+
+      Rule.new(
+        id: id,
+        match_attributes: match,
+        rate: rate.to_f,
+        capture: capture,
+        baseline: baseline,
+        filters: compiled.freeze
+      )
     rescue StandardError
       nil
     end

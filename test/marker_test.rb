@@ -29,6 +29,14 @@ class MarkerTest < Minitest::Test
     assert_nil @marker.rule_id("trace-other")
   end
 
+  def test_entry_says_whether_the_rule_is_judged
+    @marker.mark("trace-1", owner_span_id: "span-a", rule_id: 7)
+    @marker.mark("trace-2", owner_span_id: "span-b", rule_id: 8, judged: true)
+    assert_equal [7, false], @marker.entry("trace-1").to_h.values_at(:rule_id, :judged)
+    assert_equal [8, true], @marker.entry("trace-2").to_h.values_at(:rule_id, :judged)
+    assert_nil @marker.entry("trace-other")
+  end
+
   def test_owner_true_only_for_matching_span_id
     @marker.mark("trace-1", owner_span_id: "span-a", rule_id: 7)
     assert @marker.owner?("trace-1", "span-a")

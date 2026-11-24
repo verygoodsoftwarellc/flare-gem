@@ -53,7 +53,7 @@ module Flare
         next unless @sampler.trace_id_ratio(ctx.trace_id) < rule.rate
 
         current_span.set_attribute(Flare::Sampler::RULE_ID_ATTRIBUTE, rule.id) if current_span.respond_to?(:set_attribute)
-        @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule.id)
+        @marker.mark(ctx.trace_id, owner_span_id: ctx.span_id, rule_id: rule.id, judged: rule.judged?)
         break
       end
     end

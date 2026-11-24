@@ -206,6 +206,8 @@ Spans are stored in a local SQLite database (`db/flare.sqlite3` by default) and 
 
 ### What leaves your app
 
+Traces leave your app only while someone has started tracing an operation in Flare, for an hour at most. Each trace rule says which requests to keep: SLO failures (slow or errored, the default), errors only, or all requests, optionally narrowed by method, path, query param, status or duration. Your app checks those when each request ends and drops the requests it doesn't keep, so they're never uploaded.
+
 Captured traces go through your app's `config.filter_parameters` before upload, including query strings, along with a default list of common credential names. SQL statements have their values replaced with `?`, Redis statements keep the command and the key's first segment, MongoDB commands keep their structure with values masked, URLs lose their userinfo and fragments, and mail recipients, subjects, job arguments and exception contents are left out. Cache keys keep only their leading word. Metrics carry names (controller, job, table, operation, host), not values, plus your app's deployed revision (usually a git SHA) so Flare can mark deploys. Your local development database and dashboard keep the full values, except Redis arguments, which aren't kept anywhere.
 
 ## Development
