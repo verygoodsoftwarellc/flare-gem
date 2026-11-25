@@ -17,10 +17,6 @@ module Flare
       def normalized
         "#{ErrorFingerprint.normalize_file(file)}:#{ErrorFingerprint.normalize_method(method)}"
       end
-
-      def to_h
-        { file: file, line: line, method: method, app: app }
-      end
     end
 
     # "/path/file.rb:12:in `method'" (Ruby < 3.4) or "in 'Klass#method'" (3.4+).
@@ -41,10 +37,14 @@ module Flare
 
     def fingerprint(class_name, frames)
       app = frames.select(&:app)
-      picked = (app.empty? ? frames : app).map(&:normalized)
       # A block around code adds a "block in foo" frame next to "foo"; collapse
       # repeats so wrapping a line in a block doesn't change the group.
-      picked = picked.chunk_while { |a, b| a == b }.map(&:first).first(FINGERPRINT_FRAMES)
+      picked = []
+      (app.empty? ? frames : app).each do |frame|
+        normalized = frame.normalized
+        picked << normalized unless picked.last == normalized
+        break if picked.size == FINGERPRINT_FRAMES
+      end
       Digest::SHA256.hexdigest([normalize_class(class_name), *picked].join("\n"))[0, 16]
     end
 
@@ -106,9 +106,11 @@ module Flare
     end
 
     def app_root
-      root = (Rails.root.to_s if defined?(Rails) && Rails.respond_to?(:root) && Rails.root)
-      root ||= Dir.pwd
-      root.end_with?("/") ? root : "#{root}/"
+      @app_root ||= begin
+        root = (Rails.root.to_s if defined?(Rails) && Rails.respond_to?(:root) && Rails.root)
+        root ||= Dir.pwd
+        root.end_with?("/") ? root : "#{root}/"
+      end
     rescue StandardError
       nil
     end

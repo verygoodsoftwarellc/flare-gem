@@ -2,7 +2,6 @@
 
 require "json"
 require "zlib"
-require "stringio"
 
 require_relative "error_fingerprint"
 require_relative "utf8"
@@ -108,7 +107,6 @@ module Flare
 
     def build(exception:, class_name:, fingerprint:, frames:, handled:, operation:, occurred_at:,
               revision: nil, host: nil, hex_trace_id: nil, route: nil, params: [], source: nil)
-      backtrace, omitted = trim_frames(frames)
       sample = {
         schema_version: 1,
         fingerprint: fingerprint,
@@ -127,41 +125,36 @@ module Flare
         language_version: RUBY_VERSION,
         sdk_version: Flare::VERSION,
         frames: frames.select(&:app).map(&:normalized).uniq.first(ErrorFingerprint::FINGERPRINT_FRAMES * 4),
-        backtrace: backtrace.map(&:to_h),
-        omitted_frames: omitted
       }
       cause = exception.cause
       sample[:cause] = { class: cause.class.name, message: scrub_message(cause.message) } if cause
-      fit(UTF8.scrub(sample))
+      fit(UTF8.scrub(sample), frames)
     end
 
     # The JSON for a sample, or nil when it can't be brought under MAX_BYTES.
     # Shrinks the parts that can be big before giving up.
-    def fit(sample)
-      json = JSON.generate(sample)
+    def fit(sample, frames)
+      json = with_backtrace(sample, frames, MAX_FRAMES)
       return json if json.bytesize <= MAX_BYTES
 
-      sample = sample.merge(message: sample[:message].to_s.byteslice(0, 1_024).scrub("")).tap { |s| s.delete(:cause) }
-      json = JSON.generate(sample)
+      sample = sample.except(:cause).merge(message: sample[:message].to_s.byteslice(0, 1_024).scrub(""))
+      json = with_backtrace(sample, frames, MAX_FRAMES)
       return json if json.bytesize <= MAX_BYTES
 
       [50, 10].each do |max|
-        frames = sample[:backtrace].map { |h| ErrorFingerprint::Frame.new(**h) }
-        kept, omitted = trim_frames(frames, max)
-        sample = sample.merge(backtrace: kept.map(&:to_h), omitted_frames: sample[:omitted_frames] + omitted, params: [])
-        json = JSON.generate(sample)
+        json = with_backtrace(sample.merge(params: []), frames, max)
         return json if json.bytesize <= MAX_BYTES
       end
       nil
     end
 
+    def with_backtrace(sample, frames, max)
+      kept, omitted = trim_frames(frames, max)
+      JSON.generate(sample.merge(backtrace: UTF8.scrub(kept.map(&:to_h)), omitted_frames: omitted))
+    end
+
     def gzip(json)
-      io = StringIO.new
-      io.set_encoding(Encoding::BINARY)
-      gz = Zlib::GzipWriter.new(io)
-      gz.write(json)
-      gz.close
-      io.string
+      Zlib.gzip(json)
     end
   end
 end

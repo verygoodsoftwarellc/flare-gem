@@ -355,12 +355,16 @@ module Flare
       type.nil? || !ignored_exception_type?(type)
     end
 
+    def exception_type(span)
+      self.class.exception_type(span)
+    end
+
     # A job's retried exception is recorded on its enqueue_retry child span,
     # so the process span only names it in the status description.
-    def exception_type(span)
+    def self.exception_type(span)
       event = span.events&.reverse_each&.find { |e| e.name == "exception" }
       event&.attributes&.[]("exception.type") ||
-        span.status.description.to_s[ACTIVE_JOB_ERROR_STATUS, 1]
+        span.status&.description.to_s[ACTIVE_JOB_ERROR_STATUS, 1]
     end
 
     # Subclasses of an ignored class match when the class is loaded.

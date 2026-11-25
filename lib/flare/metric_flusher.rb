@@ -268,10 +268,14 @@ module Flare
       defined?(MetricSubmitter::DeadlineExceeded) && error.is_a?(MetricSubmitter::DeadlineExceeded)
     end
 
+    # Each reporter (trace health, error counts) on its own, so one raising
+    # can't skip the others.
     def record_health_metrics
-      @health_reporters.each { |reporter| reporter.record(@storage) }
-    rescue => e
-      warn "[Flare] Health metric recording error: #{e.message}"
+      @health_reporters.each do |reporter|
+        reporter.record(@storage)
+      rescue => e
+        warn "[Flare] Health metric recording error: #{e.message}"
+      end
     end
 
     def log(message)

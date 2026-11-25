@@ -366,6 +366,8 @@ module Flare
   # Error tracking needs the rules poll (its on/off switch and upload URLs)
   # and the metrics flush (its counts), so it exists only when both run. It
   # stays off until /api/rules says error_tracking: true.
+  # Built from start_rule_manager, which the engine runs before
+  # start_metrics_flusher picks it up.
   def setup_error_tracker
     return if ErrorTracker.current || !configuration.metrics_enabled
 

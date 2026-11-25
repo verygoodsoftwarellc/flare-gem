@@ -159,7 +159,7 @@ class ErrorUploadFlowTest < Minitest::Test
     @transport.queue(:post, Flare::HttpTransport::Response.new(code: "500", body: "", headers: {}))
 
     refute @uploader.upload(sample, { upload_id: "u", key: "k", put_url: "https://r2.example/x" })
-    assert_equal 1, @uploader.notify_failure_count.value
+    assert_equal 0, @uploader.put_failure_count.value
   end
 
   def test_turning_tracking_off_sends_nothing

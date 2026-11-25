@@ -7,6 +7,7 @@ require "concurrent/atomic/atomic_fixnum"
 require_relative "client_headers"
 require_relative "error_sample"
 require_relative "http_transport"
+require_relative "trace_exporter"
 
 module Flare
   # Uploads one error sample the way TraceExporter uploads a trace: PUT the
@@ -16,12 +17,9 @@ module Flare
   # A failed PUT drops the sample (the URL was its quota). A failed notify
   # leaves the blob in incoming/, which expires after an hour.
   class ErrorUploader
-    PUT_HEADERS = {
-      "Content-Type"     => "application/json",
-      "Content-Encoding" => "gzip"
-    }.freeze
+    PUT_HEADERS = TraceExporter::PUT_HEADERS
 
-    attr_reader :put_failure_count, :notify_failure_count
+    attr_reader :put_failure_count
 
     def initialize(notify_url:, api_key:, project:, environment:, transport: nil, logger: nil)
       @notify_url = notify_url.to_s
@@ -31,7 +29,6 @@ module Flare
       @transport = transport || HttpTransport.new
       @logger = logger || Logger.new($stderr, level: Logger::WARN)
       @put_failure_count = Concurrent::AtomicFixnum.new(0)
-      @notify_failure_count = Concurrent::AtomicFixnum.new(0)
     end
 
     # sample: { fingerprint:, json:, occurred_at:, revision:, hex_trace_id: }
@@ -39,17 +36,11 @@ module Flare
     # True once the sample is in R2 and ingest was told.
     def upload(sample, entry)
       response = @transport.put(entry[:put_url], ErrorSample.gzip(sample[:json]), PUT_HEADERS)
-      unless %w[200 204].include?(response.code)
-        @put_failure_count.increment
-        @logger.warn("[Flare::ErrorUploader] PUT failed: HTTP #{response.code}")
-        return false
-      end
+      return failed("PUT failed: HTTP #{response.code}", @put_failure_count) unless %w[200 204].include?(response.code)
 
       notify(sample, entry)
     rescue StandardError => e
-      @put_failure_count.increment
-      @logger.warn("[Flare::ErrorUploader] upload raised: #{e.class}: #{e.message}")
-      false
+      failed("upload raised: #{e.class}: #{e.message}", @put_failure_count)
     end
 
     private
@@ -64,14 +55,14 @@ module Flare
         hex_trace_id: sample[:hex_trace_id]
       )
       response = @transport.post(@notify_url, body, notify_headers)
-      return true if response.code.start_with?("2")
-
-      @notify_failure_count.increment
-      @logger.warn("[Flare::ErrorUploader] notify failed: HTTP #{response.code}")
-      false
+      response.code.start_with?("2") || failed("notify failed: HTTP #{response.code}")
     rescue StandardError => e
-      @notify_failure_count.increment
-      @logger.warn("[Flare::ErrorUploader] notify raised: #{e.class}: #{e.message}")
+      failed("notify raised: #{e.class}: #{e.message}")
+    end
+
+    def failed(message, counter = nil)
+      counter&.increment
+      @logger.warn("[Flare::ErrorUploader] #{message}")
       false
     end
 

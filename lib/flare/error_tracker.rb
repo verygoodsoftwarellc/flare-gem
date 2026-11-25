@@ -13,6 +13,7 @@ require_relative "error_fingerprint"
 require_relative "error_sample"
 require_relative "metric_key"
 require_relative "metric_storage"
+require_relative "metric_span_processor"
 
 module Flare
   # Counts errors by fingerprint and holds one sample of each new one.
@@ -44,7 +45,6 @@ module Flare
     FINGERPRINT_PATTERN = /\A[0-9a-f]{16}\z/
     # Rails reports cache store errors it already rescued and fell back from.
     SKIP_SOURCES = /_cache_store\.active_support\z/
-    ACTIVE_JOB_ERROR_STATUS = /\AUnexpected ActiveJob Error (\S+)\z/
     WRAPPER_CLASSES = %w[ActionView::Template::Error].freeze
     SPAN_EXCEPTION_KEY = :__flare_span_exception
 
@@ -54,7 +54,7 @@ module Flare
       attr_accessor :current
     end
 
-    attr_reader :refused_count, :upload_count, :dropped_sample_count
+    attr_reader :refused_count, :upload_count
 
     def initialize(configuration: Flare.configuration, uploader: nil, executor: nil,
                    clock: Time, logger: nil)
@@ -66,7 +66,6 @@ module Flare
       @enabled = Concurrent::AtomicBoolean.new(false)
       @refused_count = Concurrent::AtomicFixnum.new(0)
       @upload_count = Concurrent::AtomicFixnum.new(0)
-      @dropped_sample_count = Concurrent::AtomicFixnum.new(0)
       reset_state
     end
 
@@ -107,10 +106,8 @@ module Flare
     # Called by MetricSpanProcessor for every web request and job span.
     # A failed one counts when its exception is known and wasn't reported.
     def entry_span_finished(span, operation:, error:)
-      return unless enabled?
-
-      exception = span_exception(span) if error
-      Thread.current[SPAN_EXCEPTION_KEY] = nil
+      exception = span_exception(span) if error && enabled?
+      Thread.current[SPAN_EXCEPTION_KEY] = nil if Thread.current[SPAN_EXCEPTION_KEY]
       report(exception, handled: false, span: span, operation: operation) if exception
     end
 
@@ -164,7 +161,7 @@ module Flare
       granted = {}
       Array(payload["error_uploads"]).each do |raw|
         entry = upload_entry(raw)
-        granted[entry[:fingerprint]] ||= entry if entry && requested.include?(entry[:fingerprint])
+        granted[entry[:fingerprint]] ||= entry if entry
       end
 
       uploads = @mutex.synchronize do
@@ -229,8 +226,8 @@ module Flare
       trace_id = hex_trace_id(span)
       revision = @configuration.revision
       meta = { fingerprint: fingerprint, occurred_at: now.utc.iso8601(3), revision: revision, hex_trace_id: trace_id }
+      controller = context[:controller]
       hold_sample(fingerprint, meta) do
-        controller = context[:controller]
         ErrorSample.build(
           exception: error,
           class_name: class_name,
@@ -265,7 +262,6 @@ module Flare
         if json && enabled?
           @waiting[fingerprint] = meta.merge(json: json)
         else
-          @dropped_sample_count.increment unless json
           @waiting.delete(fingerprint)
         end
       end
@@ -336,7 +332,8 @@ module Flare
 
     # The span's own exception, or for a job whose retry recorded it on a
     # child span, the one this thread recorded last in the same trace when
-    # the span names its class.
+    # the span names its class. That fallback only holds the latest one per
+    # thread, which covers ActiveJob retries (same thread, child ends first).
     def span_exception(span)
       own = span.instance_variable_get(:@flare_exception)
       return own if own
@@ -344,13 +341,7 @@ module Flare
       trace_id, exception = Thread.current[SPAN_EXCEPTION_KEY]
       return nil unless exception && trace_id == span.context.trace_id
 
-      exception if exception_type(span) == exception.class.name
-    end
-
-    def exception_type(span)
-      event = span.events&.reverse_each&.find { |e| e.name == "exception" }
-      event&.attributes&.[]("exception.type") ||
-        span.status&.description.to_s[ACTIVE_JOB_ERROR_STATUS, 1]
+      exception if MetricSpanProcessor.exception_type(span) == exception.class.name
     end
 
     def operation_for(context, span)
@@ -436,8 +427,7 @@ module Flare
     # exception event is known when the span finishes.
     module SpanExceptionCapture
       def record_exception(exception, attributes: nil)
-        tracker = ErrorTracker.current
-        tracker.remember_span_exception(self, exception) if tracker&.enabled?
+        ErrorTracker.current&.remember_span_exception(self, exception)
         super
       end
     end
