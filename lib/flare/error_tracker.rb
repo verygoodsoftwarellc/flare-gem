@@ -42,6 +42,8 @@ module Flare
     MAX_WAITING_SAMPLES = 20
     MAX_REQUESTED_SAMPLES = 10
     MAX_SEEN_FINGERPRINTS = 10_000
+    # Distinct rows held between flushes; new ones past this count as overflow.
+    MAX_KEYS = 1_000
     FINGERPRINT_PATTERN = /\A[0-9a-f]{16}\z/
     # Rails reports cache store errors it already rescued and fell back from.
     SKIP_SOURCES = /_cache_store\.active_support\z/
@@ -212,15 +214,17 @@ module Flare
       class_name = error.class.name || ErrorFingerprint.normalize_class(error.class.to_s)
       fingerprint = ErrorFingerprint.fingerprint(class_name, frames)
       span ||= current_span
-      operation = (operation || operation_for(context, span)).to_s[0, MAX_OPERATION_LENGTH]
+      operation = (operation || operation_for(context, span)).to_s.dup.force_encoding(Encoding::UTF_8).scrub("?")[0, MAX_OPERATION_LENGTH]
+      bucket = now.utc
 
       key = MetricKey.new(
-        bucket: Time.utc(now.year, now.month, now.day, now.hour, now.min, 0),
+        bucket: Time.utc(bucket.year, bucket.month, bucket.day, bucket.hour, bucket.min, 0),
         namespace: NAMESPACE,
         service: class_name[0, MAX_SERVICE_LENGTH],
         target: fingerprint,
         operation: operation
       )
+      key = overflow_key(key, operation: OVERFLOW_SERVICE) if @counts.size >= MAX_KEYS && !@counts[key]
       @counts.increment(key, duration_ms: 0, error: !handled)
 
       trace_id = hex_trace_id(span)
@@ -274,6 +278,8 @@ module Flare
       return unless @uploader
 
       executor.post do
+        next unless enabled?
+
         @upload_count.increment if @uploader.upload(sample, entry)
       rescue StandardError => e
         @logger.warn("[Flare::ErrorTracker] upload raised: #{e.class}: #{e.message}")
@@ -297,9 +303,9 @@ module Flare
       entry.transform_keys(&:to_sym)
     end
 
-    def overflow_key(key)
+    def overflow_key(key, operation: key.operation)
       MetricKey.new(bucket: key.bucket, namespace: NAMESPACE, service: OVERFLOW_SERVICE,
-                    target: OVERFLOW_FINGERPRINT, operation: key.operation)
+                    target: OVERFLOW_FINGERPRINT, operation: operation)
     end
 
     # Marks the exception (and what it wraps) as counted. False when it

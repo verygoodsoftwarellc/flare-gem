@@ -266,7 +266,63 @@ class ErrorTrackerTest < Minitest::Test
     refute @tracker.report(bad, handled: false)
   end
 
+  def test_invalid_utf8_operation_still_serializes
+    enable
+    @tracker.report(raised, handled: false, context: { operation: "Bad\xff#op".b })
+
+    key, = flush.first
+    assert_equal "Bad?#op", key.operation
+    JSON.generate(key.operation)
+  end
+
+  def test_bucket_is_the_utc_minute_on_non_utc_hosts
+    clock = Object.new
+    def clock.now = Time.new(2026, 11, 25, 16, 57, 30, "-05:00")
+    tracker = Flare::ErrorTracker.new(configuration: @configuration, clock: clock, logger: Logger.new(IO::NULL))
+    tracker.apply_rules({ "error_tracking" => true })
+    tracker.report(raised, handled: false)
+
+    storage = Flare::MetricStorage.new
+    tracker.record(storage)
+    key, = storage.drain.first
+    assert_equal Time.utc(2026, 11, 25, 21, 57, 0), key.bucket
+  end
+
+  def test_distinct_rows_are_capped_between_flushes
+    enable
+    error = raised
+    (Flare::ErrorTracker::MAX_KEYS + 50).times do |i|
+      @tracker.report(error.dup.tap { |e| e.set_backtrace(error.backtrace) }, handled: false, context: { operation: "op#{i}" })
+    end
+
+    rows = flush
+    assert_equal Flare::ErrorTracker::MAX_KEYS + 1, rows.size
+    overflow = rows.find { |key, _| key.operation == Flare::ErrorTracker::OVERFLOW_SERVICE }
+    assert_equal 50, overflow.last[:count]
+  end
+
+  def test_queued_upload_is_skipped_once_tracking_turns_off
+    queued = []
+    executor = Object.new
+    executor.define_singleton_method(:post) { |&block| queued << block }
+    tracker = Flare::ErrorTracker.new(configuration: @configuration, uploader: @uploader, executor: executor,
+                                      logger: Logger.new(IO::NULL))
+    tracker.apply_rules({ "error_tracking" => true })
+    tracker.report(raised, handled: false)
+    requested = tracker.sample_request
+    tracker.apply_rules({ "error_tracking" => true, "error_uploads" => requested.map { |fp| upload_entry(fp) } }, requested: requested)
+    assert_equal 1, queued.size
+
+    tracker.apply_rules({ "error_tracking" => false })
+    queued.each(&:call)
+    assert_empty @uploader.uploads
+  end
+
   private
+
+  def upload_entry(fingerprint)
+    { "fingerprint" => fingerprint, "upload_id" => "u1", "key" => "k1", "put_url" => "https://r2.test/k1" }
+  end
 
   def enable
     @tracker.apply_rules({ "error_tracking" => true })
