@@ -44,6 +44,15 @@ class WebMarkerSubscriberTest < Minitest::Test
     refute @marker.marked?("trace-1")
   end
 
+  def test_no_op_when_the_request_is_not_recorded
+    @sampler.update_rules([rule(id: 9, controller: "UsersController", action: "show", rate: 1.0)])
+    ignored = MockSpan.new(trace_id: "trace-1", span_id: "rack-span", recording: false)
+
+    @subscriber.handle(payload(controller: "UsersController", action: "show"), current_span: ignored)
+
+    refute @marker.marked?("trace-1")
+  end
+
   def test_no_op_when_payload_lacks_controller_or_action
     @sampler.update_rules([rule(id: 9, controller: "UsersController", action: "show", rate: 1.0)])
     @subscriber.handle({}, current_span: @span)
@@ -83,12 +92,14 @@ class WebMarkerSubscriberTest < Minitest::Test
   class MockSpan
     attr_reader :attributes
 
-    def initialize(trace_id:, span_id:)
+    def initialize(trace_id:, span_id:, recording: true)
       @attributes = {}
       @context = MockContext.new(trace_id, span_id)
+      @recording = recording
     end
 
     def context = @context
+    def recording? = @recording
 
     def set_attribute(key, value)
       @attributes[key] = value

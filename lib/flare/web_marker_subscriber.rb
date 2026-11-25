@@ -41,7 +41,10 @@ module Flare
     # current_span lets tests inject a context; in production it's the
     # rack server span on the current thread.
     def handle(payload, current_span: OpenTelemetry::Trace.current_span)
-      return unless current_span
+      # A request the app ignores (ignore_request) has a valid context but a
+      # non-recording span that never reaches on_finish, so its entry would
+      # never be removed.
+      return unless current_span&.recording?
       ctx = current_span.context
       return unless ctx && ctx.valid?
 
