@@ -45,6 +45,12 @@ module Flare
     # judged_rule's answer for a marked trace whose rule the server no longer sends.
     EXPIRED_RULE = :expired
 
+    # How long, and for how many traces, a dropped sampled request is
+    # remembered so spans that finish after it are dropped too. A sampled
+    # span is otherwise kept even after its trace was unmarked.
+    DROPPED_TRACE_MEMORY = 5 * 60 # seconds
+    MAX_DROPPED_TRACES = 10_000
+
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
 
     # sampler and slo_check enable judged rules: sampler says which rules
@@ -80,6 +86,7 @@ module Flare
       @last_export_result = SUCCESS
       @flush_owner      = nil
       @baselines_taken  = {}
+      @dropped_traces   = {}
       @pid              = $$
 
       @dropped_count       = Concurrent::AtomicFixnum.new(0)
@@ -113,6 +120,7 @@ module Flare
       owner_finished = marked && @marker.owner?(ctx.trace_id, ctx.span_id)
 
       return unless sampled || marked
+      return if sampled && !marked && dropped?(ctx.trace_id)
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
@@ -121,10 +129,10 @@ module Flare
       if rule
         # Only the owner ends the request; a nested job or server span is part of it.
         return enqueue(span_data, complete: false) unless owner_finished
-        return discard_trace(ctx.trace_id) if rule == EXPIRED_RULE
+        return discard_trace(ctx.trace_id, sampled) if rule == EXPIRED_RULE
 
         reason = verdict(rule, span_data)
-        return discard_trace(ctx.trace_id) unless reason
+        return discard_trace(ctx.trace_id, sampled) unless reason
 
         span_data = with_capture_reason(span_data, reason)
       end
@@ -261,12 +269,30 @@ module Flare
 
     # The rule doesn't keep the request: drop what was buffered for it and
     # stop following the trace, so spans that finish later are dropped too.
-    def discard_trace(trace_id)
+    # Unmarking is enough for a marked trace; a sampled one is remembered.
+    def discard_trace(trace_id, sampled)
       @mutex.synchronize do
         take_pending(trace_id)
         @delayed_ready_by_trace.delete(trace_id)
+        remember_dropped(trace_id) if sampled
       end
       @marker.unmark(trace_id)
+    end
+
+    # Caller holds @mutex. Entries expire in insertion order.
+    def remember_dropped(trace_id)
+      now = monotonic_now
+      while (oldest = @dropped_traces.first) && (oldest[1] <= now || @dropped_traces.size >= MAX_DROPPED_TRACES)
+        @dropped_traces.shift
+      end
+      @dropped_traces[trace_id] = now + DROPPED_TRACE_MEMORY
+    end
+
+    def dropped?(trace_id)
+      @mutex.synchronize do
+        expires_at = @dropped_traces[trace_id]
+        !expires_at.nil? && expires_at > monotonic_now
+      end
     end
 
     def with_capture_reason(span_data, reason)
@@ -573,6 +599,7 @@ module Flare
       @flush_prior_result = SUCCESS
       @flush_owner = nil
       @baselines_taken = {}
+      @dropped_traces = {}
       @stopped = false
       @worker = nil
       start_worker

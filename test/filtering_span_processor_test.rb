@@ -394,6 +394,24 @@ end
     processor&.shutdown(timeout: 1)
   end
 
+  # A span that finished after its sampled request was judged and dropped
+  # (work on another thread) was buffered and uploaded alone by the next flush.
+  def test_spans_finishing_after_a_dropped_sampled_trace_are_dropped_too
+    processor = failures_only_processor(verdict: nil)
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
+
+    processor.on_start(root, nil)
+    processor.on_finish(root)
+    processor.on_finish(span(trace_id: "t1", span_id: "late", sampled: true, parent_span_id: "root"))
+    processor.force_flush
+
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_rescues_exporter_exceptions_and_counts_them
     @exporter.raise_with = RuntimeError.new("boom")
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: true))
