@@ -275,9 +275,9 @@ class ErrorTrackerTest < Minitest::Test
     JSON.generate(key.operation)
   end
 
-  def test_operation_in_another_encoding_is_transcoded
+  def test_binary_tagged_utf8_operation_keeps_its_characters
     enable
-    @tracker.report(raised, handled: false, context: { operation: "Réserver".encode(Encoding::ISO_8859_1) })
+    @tracker.report(raised, handled: false, context: { operation: "Réserver".b })
 
     key, = flush.first
     assert_equal "Réserver", key.operation

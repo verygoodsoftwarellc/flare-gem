@@ -214,7 +214,7 @@ module Flare
       class_name = error.class.name || ErrorFingerprint.normalize_class(error.class.to_s)
       fingerprint = ErrorFingerprint.fingerprint(class_name, frames)
       span ||= current_span
-      operation = (operation || operation_for(context, span)).to_s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "?").scrub("?")[0, MAX_OPERATION_LENGTH]
+      operation = (operation || operation_for(context, span)).to_s.dup.force_encoding(Encoding::UTF_8).scrub("?")[0, MAX_OPERATION_LENGTH]
       bucket = now.utc
 
       key = MetricKey.new(
