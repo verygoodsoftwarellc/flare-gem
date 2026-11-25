@@ -10,6 +10,7 @@ module Flare
     attr_accessor :max_spans
     attr_accessor :ignore_request
     attr_accessor :ignore_errors
+    attr_accessor :error_tracking_ignores
     attr_writer :database_path
 
     # Spans: detailed trace data stored in SQLite (default: development only)
@@ -42,6 +43,33 @@ module Flare
       GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
     ].freeze
 
+    # Noise error tracking skips on top of ignore_errors, like Honeybadger's
+    # defaults: bad routes, missing records, bad tokens and malformed
+    # requests. Kept apart from ignore_errors so turning error tracking on
+    # doesn't change how metrics count failed jobs.
+    DEFAULT_ERROR_TRACKING_IGNORES = %w[
+      AbstractController::ActionNotFound
+      ActionController::BadRequest
+      ActionController::InvalidAuthenticityToken
+      ActionController::InvalidCrossOriginRequest
+      ActionController::MethodNotAllowed
+      ActionController::NotImplemented
+      ActionController::ParameterMissing
+      ActionController::RoutingError
+      ActionController::UnknownAction
+      ActionController::UnknownFormat
+      ActionController::UnknownHttpMethod
+      ActionDispatch::Http::MimeNegotiation::InvalidType
+      ActionDispatch::Http::Parameters::ParseError
+      ActiveRecord::RecordNotFound
+      CGI::Session::CookieStore::TamperedWithCookie
+      Mongoid::Errors::DocumentNotFound
+      Rack::QueryParser::InvalidParameterError
+      Rack::QueryParser::ParameterTypeError
+      Sidekiq::JobRetry::Skip
+      Sinatra::NotFound
+    ].freeze
+
     # HTTP metrics path tracking configuration.
     # Controls which outgoing HTTP paths are tracked with detail vs collapsed to "*".
     attr_reader :http_metrics_config
@@ -57,6 +85,7 @@ module Flare
       @database_path = nil
       @ignore_request = ->(request) { false }
       @ignore_errors = DEFAULT_IGNORE_ERRORS.dup
+      @error_tracking_ignores = DEFAULT_ERROR_TRACKING_IGNORES.dup
       @subscribe_patterns = DEFAULT_SUBSCRIBE_PATTERNS.dup
       @debug = ENV["FLARE_DEBUG"] == "1"
       @revision = ENV["FLARE_REVISION"]

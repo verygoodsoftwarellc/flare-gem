@@ -26,6 +26,8 @@ require_relative "flare/upload_url_pool"
 require_relative "flare/trace_exporter"
 require_relative "flare/rule_manager"
 require_relative "flare/trace_health_reporter"
+require_relative "flare/error_tracker"
+require_relative "flare/error_uploader"
 
 module Flare
   class Error < StandardError; end
@@ -142,6 +144,20 @@ module Flare
   end
 
   def trace_span_processor = @trace_span_processor
+  def error_tracker = ErrorTracker.current
+
+  # Report an error you rescued, outside Rails or wherever Rails.error isn't
+  # used. Same idea as Rails.error.report: counted as handled.
+  #
+  #   rescue => e
+  #     Flare.report(e, context: { operation: "ImportFeeds#run" })
+  #
+  # Does nothing until Flare's server turns error tracking on for the
+  # environment. Never raises.
+  def report(exception, context: {})
+    ErrorTracker.current&.report(exception, handled: true, context: context)
+    nil
+  end
   def trace_health_reporter = @trace_health_reporter
 
   # Manually flush metrics (useful for testing or forced flushes).
@@ -173,6 +189,7 @@ module Flare
   def after_fork
     @metric_flusher&.after_fork
     @rule_manager&.after_fork
+    ErrorTracker.current&.after_fork
   end
 
   # Configure OpenTelemetry SDK and instrumentations. Must run before the
@@ -270,11 +287,14 @@ module Flare
     setup_tracing_components
     return unless @sampler && @marker && @upload_url_pool
 
+    setup_error_tracker
+
     @rule_manager = RuleManager.new(
       sampler:     @sampler,
       marker:      @marker,
       pool:        @upload_url_pool,
       slo_manager: slo_manager,
+      error_tracker: error_tracker,
       base_url:    configuration.url,
       api_key:     configuration.key,
       project:     service_name_for_app,
@@ -343,15 +363,46 @@ module Flare
     log "Tracing enabled (poll=#{configuration.tracing_poll_interval}s)"
   end
 
+  # Error tracking needs the rules poll (its on/off switch and upload URLs)
+  # and the metrics flush (its counts), so it exists only when both run. It
+  # stays off until /api/rules says error_tracking: true.
+  def setup_error_tracker
+    return if ErrorTracker.current || !configuration.metrics_enabled
+
+    ErrorTracker.current = ErrorTracker.new(
+      uploader: ErrorUploader.new(
+        notify_url:  "#{configuration.url.to_s.chomp('/')}/api/errors",
+        api_key:     configuration.key,
+        project:     service_name_for_app,
+        environment: rails_env_name
+      )
+    )
+    unless OpenTelemetry::SDK::Trace::Span < ErrorTracker::SpanExceptionCapture
+      OpenTelemetry::SDK::Trace::Span.prepend(ErrorTracker::SpanExceptionCapture)
+    end
+  end
+
+  # Counts errors Rails reports: Rails.error.report/handle/record calls and
+  # the unhandled errors Rails reports from requests and jobs. Called after
+  # initializers so the tracker exists.
+  def subscribe_to_error_reporter
+    return if @error_subscriber || error_tracker.nil?
+    return unless defined?(Rails) && Rails.respond_to?(:error) && Rails.error.respond_to?(:subscribe)
+
+    @error_subscriber = ErrorTracker::ReporterSubscriber.new(error_tracker)
+    Rails.error.subscribe(@error_subscriber)
+  end
+
   # Metrics and the failures-only trace check both judge spans with these
   # settings, so a trace is kept exactly when its request counts as failing.
   # The trace check passes nil storage: it only calls slo_failure.
-  def metric_span_processor(storage)
+  def metric_span_processor(storage, error_tracker: nil)
     MetricSpanProcessor.new(
       storage: storage,
       http_metrics_config: configuration.http_metrics_config,
       ignore_errors: configuration.ignore_errors,
-      slo_manager: slo_manager
+      slo_manager: slo_manager,
+      error_tracker: error_tracker
     )
   end
 
@@ -361,7 +412,7 @@ module Flare
     return unless configuration.metrics_enabled
 
     @metric_storage ||= MetricStorage.new
-    OpenTelemetry.tracer_provider.add_span_processor(metric_span_processor(@metric_storage))
+    OpenTelemetry.tracer_provider.add_span_processor(metric_span_processor(@metric_storage, error_tracker: error_tracker))
 
     log "Metrics enabled (endpoint=#{configuration.url} key=#{configuration.key ? 'present' : 'missing'})"
 
@@ -374,7 +425,7 @@ module Flare
         storage: @metric_storage,
         submitter: submitter,
         interval: configuration.metrics_flush_interval,
-        health_reporters: @trace_health_reporter ? [@trace_health_reporter] : []
+        health_reporters: [@trace_health_reporter, error_tracker].compact
       )
       @metric_flusher.start
       log "Metrics flusher started (interval=#{configuration.metrics_flush_interval}s)"
@@ -570,6 +621,8 @@ module Flare
     @metric_flusher = nil
     @metric_storage = nil
     @slo_manager = nil
+    ErrorTracker.current = nil
+    @error_subscriber = nil
     @otel_configured = false
   end
 end

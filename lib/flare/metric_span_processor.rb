@@ -48,8 +48,9 @@ module Flare
     }.freeze
     READ_TABLE = /\bFROM\s+[`"]?(\w+)[`"]?/i
 
-    def initialize(storage:, http_metrics_config: nil, ignore_errors: nil, slo_manager: nil)
+    def initialize(storage:, http_metrics_config: nil, ignore_errors: nil, slo_manager: nil, error_tracker: nil)
       @storage = storage
+      @error_tracker = error_tracker
       @http_metrics_config = http_metrics_config || HttpMetricsConfig::DEFAULT
       @ignore_errors = ignore_errors || []
       @slo_manager = slo_manager || SloManager.new
@@ -172,6 +173,7 @@ module Flare
 
       duration = duration_ms(span)
       @storage.increment(key, duration_ms: duration, error: error, slow: slow?(key, duration, error))
+      @error_tracker&.entry_span_finished(span, operation: key.target, error: error)
     end
 
     # [metric key, error?] for a web request or job span, nil for anything
