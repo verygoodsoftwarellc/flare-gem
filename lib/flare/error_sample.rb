@@ -30,7 +30,7 @@ module Flare
     # Whatever follows "=": Postgres' "Key (email)=(a@b.c)", "token = abc".
     # A quoted value is masked whole. A parenthesized one runs to the last ")"
     # in the message (the value can hold one or span lines), or to the end.
-    ASSIGNED = /(?<==)[ \t]*(?:#{QUOTED}|\((?m:.*)\)|\((?m:.*)|[^\s,;)\]}]+)/
+    ASSIGNED = /(?<==)[ \t]*(?:#{QUOTED}[^\s,;)\]}]*|\((?m:.*)\)|\((?m:.*)|[^\s,;)\]}]+)/
     EMAIL = /[\w.+%-]+@[\w-]+(?:\.[\w-]+)+/
     UUID = /\h{8}-\h{4}-\h{4}-\h{4}-\h{12}/
     # Hex ids and digests: 8+ hex chars with both a digit and a letter.

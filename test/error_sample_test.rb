@@ -25,6 +25,7 @@ class ErrorSampleTest < Minitest::Test
     assert_equal "Key (a, b)=? already exists.", Flare::ErrorSample.scrub_message("Key (a, b)=(1, x) y) already exists.")
     assert_equal "password =? rejected", Flare::ErrorSample.scrub_message("password = hunter2 rejected")
     assert_equal "password =? rejected", Flare::ErrorSample.scrub_message(%(password = "hunter two" rejected))
+    assert_equal "token=? rejected", Flare::ErrorSample.scrub_message(%(token="abc"def rejected))
     assert_equal "Key (a)=? already exists.", Flare::ErrorSample.scrub_message("Key (a)=(first line\nsecret) already exists.")
     assert_equal "Key (a)=?", Flare::ErrorSample.scrub_message("Key (a)=(first line\nsecret")
 
