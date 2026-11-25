@@ -422,6 +422,7 @@ end
     @slo_check.verdict = "error"
     @marker.mark("t1", owner_span_id: "rack", rule_id: 7, judged: true)
     processor.on_finish(span(trace_id: "t1", span_id: "query", sampled: false, parent_span_id: "rack"))
+    processor.on_finish(span(trace_id: "t1", span_id: "late", sampled: true, parent_span_id: "root"))
     processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
     processor.force_flush
 

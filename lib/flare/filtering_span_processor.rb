@@ -119,9 +119,6 @@ module Flare
       owner_finished = marked && @marker.owner?(ctx.trace_id, ctx.span_id)
 
       return unless sampled || marked
-      # Only an unmarked sampled span can belong to a dropped request: a
-      # marked trace has a new owner and is judged on its own.
-      return if sampled && !marked && dropped?(ctx.trace_id)
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
@@ -129,7 +126,7 @@ module Flare
       rule = judged_rule(ctx.trace_id, marked) if complete
       if rule
         # Only the owner ends the request; a nested job or server span is part of it.
-        return enqueue(span_data, complete: false) unless owner_finished
+        return enqueue(span_data, complete: false, sampled: sampled) unless owner_finished
         return discard_trace(ctx.trace_id, sampled) if rule == EXPIRED_RULE
 
         reason = verdict(rule, span_data)
@@ -141,7 +138,8 @@ module Flare
       enqueue(
         span_data,
         complete: complete,
-        delay: owner_finished ? @marked_trace_grace_period : 0
+        delay: owner_finished ? @marked_trace_grace_period : 0,
+        sampled: sampled
       )
     rescue StandardError => e
       callback_failed("on_finish", e)
@@ -286,19 +284,20 @@ module Flare
       @dropped_traces[trace_id] = true
     end
 
-    def dropped?(trace_id)
-      @mutex.synchronize { @dropped_traces.key?(trace_id) }
-    end
-
     def with_capture_reason(span_data, reason)
       tagged = span_data.dup
       tagged.attributes = (span_data.attributes || {}).merge(Sampler::CAPTURE_REASON_ATTRIBUTE => reason).freeze
       tagged
     end
 
-    def enqueue(span_data, complete:, delay: 0)
+    # A sampled span of a dropped request is dropped too. Only sampled spans:
+    # a sampled trace starts at a local root with a new trace id, so a later
+    # request that marks the same id (an unsampled span from a propagated
+    # context) is judged on its own.
+    def enqueue(span_data, complete:, delay: 0, sampled: false)
       @mutex.synchronize do
         return if @stopped
+        return if sampled && @dropped_traces.key?(span_data.trace_id)
 
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
