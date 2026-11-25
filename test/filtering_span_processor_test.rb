@@ -275,6 +275,31 @@ end
     processor&.shutdown(timeout: 1)
   end
 
+  # The rules poll sweeps the marker. A sampled job that ran past the sweep's
+  # max age lost its entry and was uploaded whole, without a verdict.
+  def test_failures_only_sampled_trace_longer_than_the_marker_sweep_is_still_judged
+    @marker = Flare::Marker.new(max_age: 0.01)
+    processor = failures_only_processor(verdict: nil)
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
+
+    processor.on_start(root, nil)
+    processor.on_finish(span(trace_id: "t1", span_id: "child", sampled: true, parent_span_id: "root"))
+    sleep 0.05
+    @marker.sweep
+    processor.force_flush
+    assert_empty @exporter.exports.flatten, "still awaiting its verdict"
+
+    processor.on_finish(root)
+    processor.force_flush
+
+    assert_equal %w[root], @slo_check.judged
+    assert_empty @exporter.exports.flatten
+    assert_equal 0, processor.buffer_size
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_all_requests_rule_keeps_every_trace_without_judging_it
     processor = failures_only_processor(verdict: nil, capture: "all_requests")
     @marker.mark("t1", owner_span_id: "rack", rule_id: 7)

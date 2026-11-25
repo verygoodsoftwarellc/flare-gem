@@ -67,6 +67,15 @@ class MarkerTest < Minitest::Test
     assert marker.marked?("new")
   end
 
+  def test_sweep_keeps_judged_entries_until_their_owner_finishes
+    marker = Flare::Marker.new(max_age: 0.05)
+    marker.mark("long-job", owner_span_id: "s", rule_id: 1, judged: true)
+    sleep 0.1
+
+    assert_equal 0, marker.sweep
+    assert marker.marked?("long-job")
+  end
+
   def test_hard_ceiling_drops_oldest_ten_percent_on_overflow
     marker = Flare::Marker.new(max_entries: 10)
     11.times { |i| marker.mark("trace-#{i}", owner_span_id: "s#{i}", rule_id: 1) }
