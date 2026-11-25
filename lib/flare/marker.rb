@@ -19,7 +19,9 @@ module Flare
   # Bounded by:
   #   - sweep(): drops entries older than max_age (default 5 min) so a rack
   #     span that never finishes (process killed mid-request, exception path
-  #     that skips ensure) doesn't leak forever.
+  #     that skips ensure) doesn't leak forever. Judged entries stay until
+  #     their owner finishes: without one, a request that ran longer than
+  #     max_age would upload unjudged.
   #   - hard ceiling at max_entries (default 10k): on overflow, drop oldest
   #     10% by marked_at.
   class Marker
@@ -84,12 +86,15 @@ module Flare
 
     # Drop entries older than max_age. Call periodically (the RuleManager's
     # scheduler is the natural place) to handle the rack-span-never-finishes
-    # leak case (CAF-7).
+    # leak case (CAF-7). Judged entries are skipped: FilteringSpanProcessor
+    # reads the entry to judge the request when its owner finishes, and a
+    # sampled request with no entry is uploaded whole. The hard ceiling
+    # still bounds them.
     def sweep
       threshold = monotonic_now - @max_age
       evicted = 0
       @entries.each_pair do |trace_id, entry|
-        if entry.marked_at < threshold
+        if !entry.judged && entry.marked_at < threshold
           @entries.delete(trace_id)
           evicted += 1
         end
