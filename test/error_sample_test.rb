@@ -16,6 +16,20 @@ class ErrorSampleTest < Minitest::Test
     assert_equal "digest ? bad", Flare::ErrorSample.scrub_message("digest 9f86d081884c7d65 bad")
   end
 
+  def test_scrub_message_masks_unterminated_and_assigned_values
+    assert_equal "bad value ?", Flare::ErrorSample.scrub_message("bad value 'hunter2 and more")
+    assert_equal "Key (email)=? already exists.", Flare::ErrorSample.scrub_message("Key (email)=(jane smith) already exists.")
+    assert_equal "login failed token=? for user", Flare::ErrorSample.scrub_message("login failed token=abcXYZ for user")
+
+    cut = Flare::ErrorSample.scrub_message("#{"x" * 4_000} 'secret #{"y" * 200}' tail")
+    refute_includes cut, "y"
+  end
+
+  def test_param_names_mask_keys_that_are_not_identifiers
+    names = Flare::ErrorSample.param_names("jane@example.com" => "1", "user" => { "has space" => "x", "ok_key" => "y" })
+    assert_equal ["?", "user[?]", "user[ok_key]"], names
+  end
+
   def test_scrub_message_keeps_method_and_constant_names
     assert_equal "undefined method 'full_name' for nil", Flare::ErrorSample.scrub_message("undefined method 'full_name' for nil")
     assert_equal "undefined method `full_name' for nil:NilClass", Flare::ErrorSample.scrub_message("undefined method `full_name' for nil:NilClass")

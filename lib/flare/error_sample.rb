@@ -24,13 +24,18 @@ module Flare
     # code ("undefined method 'name' for nil"), not data, so it stays.
     CODE_NAME = /(?<=method |variable |constant )[`'][A-Za-z_][\w:]*[?!=]?'/
     # A quote right after a letter is an apostrophe ("Couldn't"), not a value.
-    QUOTED = /(?<!\w)(?:"(?:[^"\\]|\\.)*+"|'(?:[^'\\]|\\.)*+'|`(?:[^`\\]|\\.)*+`)/
+    # One that never closes (or was cut off) masks to the end, like SqlMask.
+    QUOTED = /(?<!\w)(?:"(?:[^"\\]|\\.)*+(?:"|\z)|'(?:[^'\\]|\\.)*+(?:'|\z)|`(?:[^`\\]|\\.)*+(?:`|\z))/m
+    # Whatever follows "=": Postgres' "Key (email)=(a@b.c)", "token=abc".
+    ASSIGNED = /(?<==)(?:\([^)]*+\)?|[^\s,;)\]}]+)/
     EMAIL = /[\w.+%-]+@[\w-]+(?:\.[\w-]+)+/
     UUID = /\h{8}-\h{4}-\h{4}-\h{4}-\h{12}/
     # Hex ids and digests: 8+ hex chars with both a digit and a letter.
     HEX = /\b(?:0x)?(?=\h*\d)(?=\h*[a-f])\h{8,}\b/i
     NUMBER = /-?\d+(?:\.\d+)?/
-    VALUES = /(?<code>#{CODE_NAME})|#{QUOTED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
+    VALUES = /(?<code>#{CODE_NAME})|#{QUOTED}|#{ASSIGNED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
+    # Param keys are usually identifiers. Anything else may be data.
+    PARAM_KEY = /\A[\w\-.]{1,100}\z/
 
     module_function
 
@@ -68,7 +73,9 @@ module Flare
       params.each_pair do |key, value|
         break if names.size >= MAX_PARAM_NAMES
 
-        name = prefix ? "#{prefix}[#{key}]" : key.to_s
+        key = key.to_s
+        key = MASK unless key.match?(PARAM_KEY)
+        name = prefix ? "#{prefix}[#{key}]" : key
         next if prefix.nil? && %w[controller action].include?(name)
 
         if value.respond_to?(:each_pair) && depth < 3
