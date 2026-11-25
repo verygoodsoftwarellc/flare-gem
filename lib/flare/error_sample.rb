@@ -36,7 +36,7 @@ module Flare
     # Hex ids and digests: 8+ hex chars with both a digit and a letter.
     HEX = /\b(?:0x)?(?=\h*\d)(?=\h*[a-f])\h{8,}\b/i
     NUMBER = /-?\d+(?:\.\d+)?/
-    VALUES = /(?<code>#{CODE_NAME})|#{QUOTED}|#{ASSIGNED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
+    VALUES = /(?<code>#{CODE_NAME})|#{ASSIGNED}|#{QUOTED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
     # Param keys are usually identifiers. Anything else, or an identifier
     # that's really an id or digest, may be data.
     PARAM_KEY = /\A[A-Za-z_][\w\-.]{0,99}\z/
