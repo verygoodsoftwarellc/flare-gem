@@ -133,7 +133,7 @@ module Flare
       return if drained.empty? || !enabled?
 
       totals = Hash.new(0)
-      drained.each { |key, values| totals[key.target] += values[:count] }
+      drained.each { |key, values| totals[key.target] += values[:count] unless key.target == OVERFLOW_FINGERPRINT }
       kept = totals.size > MAX_FINGERPRINTS_PER_FLUSH ? totals.max_by(MAX_FINGERPRINTS_PER_FLUSH, &:last).to_set(&:first) : nil
 
       drained.each do |key, values|
@@ -214,7 +214,7 @@ module Flare
       class_name = error.class.name || ErrorFingerprint.normalize_class(error.class.to_s)
       fingerprint = ErrorFingerprint.fingerprint(class_name, frames)
       span ||= current_span
-      operation = (operation || operation_for(context, span)).to_s.dup.force_encoding(Encoding::UTF_8).scrub("?")[0, MAX_OPERATION_LENGTH]
+      operation = (operation || operation_for(context, span)).to_s.encode(Encoding::UTF_8, invalid: :replace, undef: :replace, replace: "?").scrub("?")[0, MAX_OPERATION_LENGTH]
       bucket = now.utc
 
       key = MetricKey.new(

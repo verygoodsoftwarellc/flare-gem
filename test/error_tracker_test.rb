@@ -275,6 +275,27 @@ class ErrorTrackerTest < Minitest::Test
     JSON.generate(key.operation)
   end
 
+  def test_operation_in_another_encoding_is_transcoded
+    enable
+    @tracker.report(raised, handled: false, context: { operation: "Réserver".encode(Encoding::ISO_8859_1) })
+
+    key, = flush.first
+    assert_equal "Réserver", key.operation
+  end
+
+  def test_overflow_does_not_take_a_fingerprint_slot
+    enable
+    counts = @tracker.instance_variable_get(:@counts)
+    bucket = Time.utc(2026, 11, 25, 12, 0)
+    key = ->(fp) { Flare::MetricKey.new(bucket: bucket, namespace: "error", service: "E", target: fp, operation: "op") }
+    100.times { |i| counts.add(key.call(format("%016x", i)), count: 2, sum_ms: 0) }
+    counts.add(key.call(Flare::ErrorTracker::OVERFLOW_FINGERPRINT), count: 1_000, sum_ms: 0)
+
+    rows = flush
+    assert_equal 101, rows.size
+    assert_equal 1_000, rows.sum { |k, v| k.target == Flare::ErrorTracker::OVERFLOW_FINGERPRINT ? v[:count] : 0 }
+  end
+
   def test_bucket_is_the_utc_minute_on_non_utc_hosts
     clock = Object.new
     def clock.now = Time.new(2026, 11, 25, 16, 57, 30, "-05:00")
@@ -289,13 +310,18 @@ class ErrorTrackerTest < Minitest::Test
   end
 
   def test_distinct_rows_are_capped_between_flushes
-    enable
+    clock = Object.new
+    def clock.now = Time.utc(2026, 11, 25, 12, 0, 30)
+    tracker = Flare::ErrorTracker.new(configuration: @configuration, clock: clock, logger: Logger.new(IO::NULL))
+    tracker.apply_rules({ "error_tracking" => true })
     error = raised
     (Flare::ErrorTracker::MAX_KEYS + 50).times do |i|
-      @tracker.report(error.dup.tap { |e| e.set_backtrace(error.backtrace) }, handled: false, context: { operation: "op#{i}" })
+      tracker.report(error.dup.tap { |e| e.set_backtrace(error.backtrace) }, handled: false, context: { operation: "op#{i}" })
     end
 
-    rows = flush
+    storage = Flare::MetricStorage.new
+    tracker.record(storage)
+    rows = storage.drain
     assert_equal Flare::ErrorTracker::MAX_KEYS + 1, rows.size
     overflow = rows.find { |key, _| key.operation == Flare::ErrorTracker::OVERFLOW_SERVICE }
     assert_equal 50, overflow.last[:count]
