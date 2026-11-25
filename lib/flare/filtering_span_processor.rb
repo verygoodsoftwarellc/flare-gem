@@ -45,10 +45,9 @@ module Flare
     # judged_rule's answer for a marked trace whose rule the server no longer sends.
     EXPIRED_RULE = :expired
 
-    # How long, and for how many traces, a dropped sampled request is
-    # remembered so spans that finish after it are dropped too. A sampled
-    # span is otherwise kept even after its trace was unmarked.
-    DROPPED_TRACE_MEMORY = 5 * 60 # seconds
+    # Dropped sampled requests remembered so spans that finish after them
+    # are dropped too; a sampled span is otherwise kept even after its trace
+    # was unmarked. Oldest forgotten first.
     MAX_DROPPED_TRACES = 10_000
 
     attr_reader :dropped_count, :failed_export_count, :exception_count, :buffer_high_watermark, :max_queue
@@ -120,7 +119,6 @@ module Flare
       owner_finished = marked && @marker.owner?(ctx.trace_id, ctx.span_id)
 
       return unless sampled || marked
-      return if sampled && !marked && dropped?(ctx.trace_id)
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
@@ -279,20 +277,10 @@ module Flare
       @marker.unmark(trace_id)
     end
 
-    # Caller holds @mutex. Entries expire in insertion order.
+    # Caller holds @mutex.
     def remember_dropped(trace_id)
-      now = monotonic_now
-      while (oldest = @dropped_traces.first) && (oldest[1] <= now || @dropped_traces.size >= MAX_DROPPED_TRACES)
-        @dropped_traces.shift
-      end
-      @dropped_traces[trace_id] = now + DROPPED_TRACE_MEMORY
-    end
-
-    def dropped?(trace_id)
-      @mutex.synchronize do
-        expires_at = @dropped_traces[trace_id]
-        !expires_at.nil? && expires_at > monotonic_now
-      end
+      @dropped_traces.shift if @dropped_traces.size >= MAX_DROPPED_TRACES
+      @dropped_traces[trace_id] = true
     end
 
     def with_capture_reason(span_data, reason)
@@ -303,7 +291,7 @@ module Flare
 
     def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do
-        return if @stopped
+        return if @stopped || @dropped_traces.key?(span_data.trace_id)
 
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
