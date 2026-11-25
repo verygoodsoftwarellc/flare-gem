@@ -136,9 +136,8 @@ Tests use Minitest. The test helper loads core library classes directly without 
 ## Releasing
 
 1. Bump `lib/flare/version.rb` and merge to `main`.
-2. On `main`: `git tag vX.Y.Z && git push --tags`.
-3. `gh release create vX.Y.Z --generate-notes` — drafts release notes from merged PRs. Edit if needed, then publish.
-4. `gem build flare.gemspec && gem push flare-X.Y.Z.gem`.
+2. On `main`: `rake release` (or `git tag vX.Y.Z && git push origin vX.Y.Z`).
+3. The tag runs `.github/workflows/release.yml`, which builds the gem, publishes it to RubyGems via trusted publishing, and creates the GitHub Release with notes generated from merged PRs. Edit the notes on GitHub if needed.
 
 `CHANGELOG.md` just points to GitHub Releases — don't maintain it by hand.
 
