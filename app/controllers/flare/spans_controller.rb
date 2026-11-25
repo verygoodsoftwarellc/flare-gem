@@ -64,7 +64,7 @@ module Flare
       @offset = params[:offset].to_i
       filter_params = { name: params[:name].presence }
 
-      spans = Flare.storage.list_spans_by_category(category, **filter_params, limit: PER_PAGE + 1, offset: @offset)
+      spans = Flare.storage.list_spans_by_category(category, **filter_params, sort: params[:sort], limit: PER_PAGE + 1, offset: @offset)
       @total_count = Flare.storage.count_spans_by_category(category, **filter_params)
       @has_next = spans.size > PER_PAGE
       @spans = spans.first(PER_PAGE)

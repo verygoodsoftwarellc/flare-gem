@@ -149,9 +149,22 @@ class IntegrationTest < Minitest::Test
     span&.finish if span&.respond_to?(:finish)
   end
 
+  def set_duration(milliseconds_by_trace)
+    db = SQLite3::Database.new(@db_path)
+    milliseconds_by_trace.each do |trace_id, ms|
+      db.execute("UPDATE flare_spans SET end_timestamp = start_timestamp + ? WHERE trace_id = ?", [ms * 1_000_000, trace_id])
+    end
+    db.close
+  end
+
+  def assert_listed_in_order(body, *names)
+    positions = names.map { |name| body.index(name) || flunk("#{name} isn't listed") }
+    assert_equal positions.sort, positions, "expected #{names.join(", ")} in that order"
+  end
+
   def create_request_span(trace_id:, name: "GET /users", method: "GET", status: 200, controller: "UsersController", action: "index")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 100_000_000 # 100ms
 
@@ -192,7 +205,7 @@ class IntegrationTest < Minitest::Test
 
   def create_job_span(trace_id:, name: "MyJob process", job_class: "MyJob", queue: "default")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 50_000_000 # 50ms
 
@@ -216,9 +229,9 @@ class IntegrationTest < Minitest::Test
     span_id
   end
 
-  def create_query_span(trace_id:, parent_span_id:, name: "sql.active_record", statement: "SELECT * FROM users")
+  def create_query_span(trace_id:, parent_span_id:, name: "sql.active_record", statement: "SELECT * FROM users", query_name: nil)
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 5_000_000 # 5ms
 
@@ -229,17 +242,19 @@ class IntegrationTest < Minitest::Test
 
     span_id = db.last_insert_row_id
 
-    db.execute(<<~SQL, ["db.statement", "\"#{statement}\"", 0, "Flare::Span", span_id, now, now])
-      INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    SQL
+    { "db.statement" => statement, "name" => query_name }.compact.each do |key, value|
+      db.execute(<<~SQL, [key, "\"#{value}\"", 0, "Flare::Span", span_id, now, now])
+        INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      SQL
+    end
 
     span_id
   end
 
   def create_exception_span(trace_id:, parent_span_id:, exception_type: "RuntimeError", exception_message: "Something went wrong")
     db = SQLite3::Database.new(@db_path, results_as_hash: true)
-    now = Time.now.iso8601(6)
+    now = Time.now.utc.iso8601(6)
     start_ts = Time.now.to_i * 1_000_000_000
     end_ts = start_ts + 1_000_000 # 1ms
 
@@ -301,6 +316,69 @@ class IntegrationTest < Minitest::Test
     assert_includes last_response.body, "badge-post"
   end
 
+  def test_requests_sort_slowest_first_and_keep_filters
+    create_request_span(trace_id: "quick", controller: "QuickController")
+    create_request_span(trace_id: "slow", controller: "SlowController")
+    create_request_span(trace_id: "medium", controller: "MediumController")
+    create_request_span(trace_id: "excluded", controller: "ExcludedController", method: "POST")
+    set_duration("quick" => 1, "slow" => 900, "medium" => 50, "excluded" => 5000)
+
+    get "/flare/requests", { method: "GET", offset: 0 }
+    assert_listed_in_order last_response.body, "MediumController", "SlowController", "QuickController"
+    sort_link = last_response.body[/<a[^>]*sort-link[^>]*>/]
+    assert_includes sort_link, "/flare/requests?method=GET&amp;sort=slowest"
+    refute_includes sort_link, "offset"
+    refute_includes last_response.body, 'name="sort"'
+
+    get "/flare/requests", { method: "GET", sort: "slowest" }
+    assert_listed_in_order last_response.body, "SlowController", "MediumController", "QuickController"
+    refute_includes last_response.body, "ExcludedController"
+    assert_includes last_response.body[/<a[^>]*sort-link[^>]*>/], %(href="/flare/requests?method=GET")
+    assert_includes last_response.body, %(name="sort" id="sort" value="slowest")
+  end
+
+  def test_jobs_sort_slowest_first
+    create_job_span(trace_id: "slow", job_class: "SlowJob")
+    create_job_span(trace_id: "quick", job_class: "QuickJob")
+    set_duration("quick" => 1, "slow" => 900)
+
+    get "/flare/jobs", { sort: "slowest" }
+
+    assert_listed_in_order last_response.body, "SlowJob", "QuickJob"
+  end
+
+  def test_span_lists_sort_slowest_first
+    create_query_span(trace_id: "slow", parent_span_id: "root", statement: "SELECT slow")
+    create_query_span(trace_id: "quick", parent_span_id: "root", statement: "SELECT quick")
+    set_duration("quick" => 1, "slow" => 900)
+
+    get "/flare/spans/queries", { sort: "slowest" }
+
+    assert_listed_in_order last_response.body, "SELECT slow", "SELECT quick"
+  end
+
+  def test_exceptions_sort_slowest_first
+    create_exception_span(trace_id: "slow", parent_span_id: "root", exception_message: "slow failure")
+    create_exception_span(trace_id: "quick", parent_span_id: "root", exception_message: "quick failure")
+    set_duration("quick" => 1, "slow" => 900)
+
+    get "/flare/spans/exceptions", { sort: "slowest" }
+
+    assert_listed_in_order last_response.body, "slow failure", "quick failure"
+  end
+
+  def test_an_unknown_sort_stays_newest_first
+    create_request_span(trace_id: "older", controller: "OlderController")
+    create_request_span(trace_id: "newer", controller: "NewerController")
+
+    get "/flare/requests", { sort: "x; DROP TABLE flare_spans" }
+    assert last_response.ok?
+    assert_listed_in_order last_response.body, "NewerController", "OlderController"
+
+    get "/flare/requests", { sort: { a: "b" } }
+    assert last_response.ok?
+  end
+
   def test_requests_index_filters_by_status
     create_request_span(trace_id: "trace_001", status: 200)
     create_request_span(trace_id: "trace_002", status: 500)
@@ -350,6 +428,27 @@ class IntegrationTest < Minitest::Test
 
     assert last_response.ok?
     assert_includes last_response.body, "GET /users"
+  end
+
+  def test_requests_show_marks_active_record_bookkeeping_for_copy_for_ai
+    create_request_span(trace_id: "trace_bookkeeping", name: "GET /posts")
+    parent = "span_trace_bookkeeping"
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "SELECT * FROM posts", query_name: "Post Load")
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "PRAGMA table_xinfo(posts)", query_name: "SCHEMA")
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "BEGIN immediate TRANSACTION", query_name: "TRANSACTION")
+    create_query_span(trace_id: "trace_bookkeeping", parent_span_id: parent, statement: "COMMIT")
+
+    get "/flare/requests/trace_bookkeeping"
+
+    assert last_response.ok?
+    spans = JSON.parse(last_response.body[/const spansData = (.*?);\n/m, 1])
+    bookkeeping = spans.to_h { |span| [span["properties"]["db.statement"], span["bookkeeping"]] }
+    assert_equal({
+      "SELECT * FROM posts" => false,
+      "PRAGMA table_xinfo(posts)" => true,
+      "BEGIN immediate TRANSACTION" => true,
+      "COMMIT" => true,
+    }, bookkeeping)
   end
 
   def test_jobs_index_empty

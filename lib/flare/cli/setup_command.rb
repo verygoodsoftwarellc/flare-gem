@@ -10,14 +10,19 @@ require "json"
 require "fileutils"
 require "timeout"
 require_relative "output"
+require_relative "project"
+require_relative "ai_clients_setup"
 
 module Flare
   class SetupCommand
     include CLI::Output
+    include CLI::Project
 
-    DEFAULT_HOST = "https://flare.am"
+    DEFAULT_HOST = AIClientsSetup::DEFAULT_HOST
     TIMEOUT_SECONDS = 300 # 5 minutes
     CLIENT_READ_TIMEOUT = 1
+    EXCHANGE_OPEN_TIMEOUT = 10
+    EXCHANGE_READ_TIMEOUT = 30
 
     class AuthorizationDenied < StandardError; end
 
@@ -46,6 +51,9 @@ module Flare
         # config.ignore_request = ->(request) {
         #   request.path.start_with?("/health")
         # }
+
+        # Exceptions (and subclasses) that don't count as errors in metrics.
+        # config.ignore_errors << "MyApp::RetryLaterError"
 
         # ── Metrics (remote monitoring) ────────────────────────────────────
         # Metrics aggregate span data into counts, durations, and error rates.
@@ -80,14 +88,16 @@ module Flare
       #   end
     RUBY
 
-    def initialize(force: false)
+    def initialize(force: false, ai_clients: AIClientsSetup.new)
       @force = force
+      @ai_clients = ai_clients
     end
 
     def run
       authenticate
       create_initializer
       add_gitignore_entries
+      @ai_clients.run
 
       puts
       puts "#{green("Setup complete!")}"
@@ -113,9 +123,7 @@ module Flare
     # --- Auth ---
 
     def authenticate
-      env_path = File.join(Dir.pwd, ".env")
-
-      if !@force && File.exist?(env_path) && File.read(env_path).match?(/^FLARE_KEY=.+/)
+      if !@force && key_in_dotenv?
         puts "#{checkmark} FLARE_KEY already set in .env, skipping auth."
         puts "  Run with --force to re-authenticate."
         return
@@ -231,11 +239,16 @@ module Flare
       "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
     end
 
+    # The browser step's code works once, so when this fails, setup has to
+    # start over. Say so, instead of printing a backtrace.
     def exchange_code(auth_code, code_verifier)
       host = ENV.fetch("FLARE_HOST", DEFAULT_HOST)
       uri = URI("#{host}/api/cli/exchange")
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
+      http.open_timeout = EXCHANGE_OPEN_TIMEOUT
+      http.read_timeout = EXCHANGE_READ_TIMEOUT
+      http.write_timeout = EXCHANGE_READ_TIMEOUT
 
       request = Net::HTTP::Post.new(uri.path)
       request["Content-Type"] = "application/x-www-form-urlencoded"
@@ -250,14 +263,24 @@ module Flare
       end
 
       data = JSON.parse(response.body)
-      token = data["token"]
+      token = data["token"] if data.is_a?(Hash)
 
-      if token.nil? || token.empty?
+      if !token.is_a?(String) || token.empty?
         $stderr.puts "No token received from server."
         exit 1
       end
 
       token
+    rescue Timeout::Error
+      exchange_failed("Flare didn't answer in time")
+    rescue JSON::ParserError, IOError, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError => e
+      exchange_failed(e.message)
+    end
+
+    def exchange_failed(reason)
+      $stderr.puts "Couldn't finish signing in to Flare: #{reason}"
+      $stderr.puts "Run #{bold("flare setup")} again."
+      exit 1
     end
 
     # --- Token storage ---
@@ -270,9 +293,12 @@ module Flare
       puts "  3. Print token"
       print "Choose (1/2/3): "
 
-      choice = $stdin.gets&.strip
-
-      case choice
+      case $stdin.gets&.strip
+      when nil
+        # Closed stdin (a script, CI, a coding agent) can't answer. Asking again
+        # would never end and lose the token we just got, so show it.
+        puts
+        print_token(token)
       when "1"
         @saved_to_dotenv = true
         save_to_dotenv(token)
@@ -374,7 +400,7 @@ module Flare
       contents = File.read(gitignore_path)
       entries_to_add = []
 
-      entries_to_add << ".env" if @saved_to_dotenv && !contents.match?(/^\.env$/)
+      entries_to_add << ".env" if (@saved_to_dotenv || key_in_dotenv?) && !env_ignored?(contents)
       entries_to_add << "flare.sqlite3*" unless contents.include?("flare.sqlite3*")
 
       return if entries_to_add.empty?

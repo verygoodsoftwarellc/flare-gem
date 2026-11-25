@@ -23,7 +23,10 @@ module Flare
   #   - hard ceiling at max_entries (default 10k): on overflow, drop oldest
   #     10% by marked_at.
   class Marker
-    Entry = Struct.new(:owner_span_id, :rule_id, :marked_at, keyword_init: true)
+    # judged: the rule decides whether to keep the request when it ends
+    # (Sampler::Rule#judged?), so a request whose rule expires mid-flight
+    # can't be judged and is dropped rather than kept.
+    Entry = Struct.new(:owner_span_id, :rule_id, :judged, :marked_at, keyword_init: true)
 
     DEFAULT_MAX_ENTRIES = 10_000
     DEFAULT_MAX_AGE = 5 * 60 # seconds
@@ -37,10 +40,11 @@ module Flare
       @evicted_count = Concurrent::AtomicFixnum.new(0)
     end
 
-    def mark(trace_id, owner_span_id:, rule_id:)
+    def mark(trace_id, owner_span_id:, rule_id:, judged: false)
       @entries[trace_id] = Entry.new(
         owner_span_id: owner_span_id,
         rule_id: rule_id,
+        judged: judged,
         marked_at: monotonic_now
       )
       maybe_evict_oldest
@@ -62,6 +66,12 @@ module Flare
     def rule_id(trace_id)
       entry = @entries[trace_id]
       entry&.rule_id
+    end
+
+    # The whole entry, so a caller reading several fields sees one snapshot
+    # even if a sweep evicts the trace in between. Treat it as read-only.
+    def entry(trace_id)
+      @entries[trace_id]
     end
 
     def unmark(trace_id)

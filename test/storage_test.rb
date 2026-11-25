@@ -4,6 +4,40 @@ require_relative "test_helper"
 require "flare/storage/sqlite"
 
 class StorageTest < Minitest::Test
+  def test_origin_separates_app_requests_from_rails_and_flare_controllers
+    with_storage do |storage, path|
+      db = SQLite3::Database.new(path)
+      controllers = {
+        "posts" => "PostsController",
+        "admin_rails" => "Admin::Rails::SettingsController",
+        "rails_named" => "RailsGuidesController",
+        "health" => "Rails::HealthController",
+        "blobs" => "ActiveStorage::Blobs::RedirectController",
+        "inbound" => "ActionMailbox::Ingresses::Relay::InboundEmailsController",
+        "flare" => "Flare::RequestsController",
+        "no_route" => nil,
+      }
+      controllers.each do |trace, controller|
+        db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('GET', 'server', ?, ?, ?, 1, 2, 'now', 'now')", [trace, trace, Flare::Storage::SQLite::MISSING_PARENT_ID])
+        span_id = db.last_insert_row_id
+        { "http.method" => "GET", "code.namespace" => controller }.compact.each do |key, value|
+          db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES (?, ?, 0, 'Flare::Span', ?, 'now', 'now')", [key, JSON.generate(value), span_id])
+        end
+      end
+      db.close
+
+      app = %w[admin_rails no_route posts rails_named]
+      rails = %w[blobs flare health inbound]
+
+      assert_equal app, storage.list_requests(origin: "app").map { |r| r[:trace_id] }.sort
+      assert_equal rails, storage.list_requests(origin: "rails").map { |r| r[:trace_id] }.sort
+      assert_equal 8, storage.list_requests.size
+      assert_equal 4, storage.count_requests(origin: "app")
+      assert_equal 4, storage.count_requests(origin: "rails")
+      assert_equal 8, storage.count_requests
+    end
+  end
+
   def test_sqlite_implements_every_base_method_with_the_same_parameters
     Flare::Storage::Base.public_instance_methods(false).each do |name|
       implementation = Flare::Storage::SQLite.instance_method(name)
@@ -45,6 +79,78 @@ class StorageTest < Minitest::Test
     end
   end
 
+  def test_queries_leave_out_active_record_bookkeeping
+    with_storage do |storage, path|
+      queries = {
+        'SELECT "posts".* FROM "posts"' => "Post Load",
+        "BEGIN immediate TRANSACTION" => "TRANSACTION",
+        "COMMIT TRANSACTION" => "TRANSACTION",
+        "SAVEPOINT active_record_1" => "TRANSACTION",
+        'PRAGMA table_xinfo("posts")' => "SCHEMA",
+        "BEGIN" => nil,
+        "SELECT 1" => nil,
+      }
+      db = SQLite3::Database.new(path)
+      queries.each do |statement, query_name|
+        db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('sql.active_record', 'internal', ?, 't', 'p', 1, 2, 'now', 'now')", [statement])
+        span_id = db.last_insert_row_id
+        { "db.statement" => statement, "name" => query_name }.compact.each do |key, value|
+          db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES (?, ?, 0, 'Flare::Span', ?, 'now', 'now')", [key, JSON.generate(value), span_id])
+        end
+      end
+      db.close
+
+      assert_equal({ "t" => 2 }, storage.count_queries_by_trace(["t"]))
+      assert_equal 2, storage.count_spans_by_category("queries")
+      assert_equal 2, storage.list_spans_by_category("queries").size
+    end
+  end
+
+  def test_count_queries_by_trace_batches_trace_ids_under_old_sqlite_bind_limits
+    with_storage do |storage, path|
+      insert_span(path, "sql.active_record", Time.now)
+      SQLite3::Database.new(path).tap { |db| db.execute("UPDATE flare_spans SET parent_span_id = 'p'") }.close
+      bind_counts = []
+      storage.define_singleton_method(:query_all) do |sql, values = []|
+        bind_counts << values.size
+        super(sql, values)
+      end
+
+      counts = storage.count_queries_by_trace(Array.new(1_200) { |i| "missing#{i}" } + ["t"])
+
+      assert_equal({ "t" => 1 }, counts)
+      assert_equal 3, bind_counts.size
+      assert bind_counts.all? { |n| n <= 999 }, "bind counts #{bind_counts.inspect} exceed 999"
+    end
+  end
+
+  def test_spans_for_trace_batches_ids_under_old_sqlite_bind_limits
+    with_storage do |storage, path|
+      db = SQLite3::Database.new(path)
+      db.transaction do
+        1_200.times do |i|
+          db.execute("INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, created_at, updated_at) VALUES ('s', 'internal', ?, 't', 'p', ?, ?, 'now', 'now')", ["s#{i}", i, i])
+        end
+      end
+      last_id = db.last_insert_row_id
+      db.execute("INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at) VALUES ('k', '\"v\"', 0, 'Flare::Span', ?, 'now', 'now')", [last_id])
+      db.execute("INSERT INTO flare_events (name, span_id, created_at, updated_at) VALUES ('e', ?, 'now', 'now')", [last_id])
+      db.close
+      bind_counts = []
+      storage.define_singleton_method(:query_all) do |sql, values = []|
+        bind_counts << values.size
+        super(sql, values)
+      end
+
+      spans = storage.spans_for_trace("t")
+
+      assert_equal 1_200, spans.size
+      assert_equal({ "k" => "v" }, spans.last[:properties])
+      assert_equal ["e"], spans.last[:events].map { |event| event[:name] }
+      assert bind_counts.all? { |n| n <= 999 }, "bind counts #{bind_counts.inspect} exceed 999"
+    end
+  end
+
   private
 
   # Storage caches its connection per thread, so use a fresh thread to avoid
@@ -64,7 +170,7 @@ class StorageTest < Minitest::Test
   end
 
   def insert_span(path, name, created_at)
-    at = created_at.iso8601(6)
+    at = created_at.getutc.iso8601(6)
     db = SQLite3::Database.new(path)
     db.execute(<<~SQL, [name, at, at])
       INSERT INTO flare_spans (name, kind, span_id, trace_id, start_timestamp, end_timestamp, created_at, updated_at)

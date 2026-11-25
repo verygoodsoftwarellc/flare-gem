@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "http_metrics_config"
+require_relative "revision"
 
 module Flare
   class Configuration
@@ -8,6 +9,7 @@ module Flare
     attr_accessor :retention_hours
     attr_accessor :max_spans
     attr_accessor :ignore_request
+    attr_accessor :ignore_errors
     attr_writer :database_path
 
     # Spans: detailed trace data stored in SQLite (default: development only)
@@ -39,6 +41,12 @@ module Flare
 
     attr_accessor :subscribe_patterns
 
+    # Exceptions that jobs raise to wait or retry rather than to fail. A span
+    # that ends with one of these (or a subclass) counts as a success.
+    DEFAULT_IGNORE_ERRORS = %w[
+      GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
+    ].freeze
+
     # HTTP metrics path tracking configuration.
     # Controls which outgoing HTTP paths are tracked with detail vs collapsed to "*".
     attr_reader :http_metrics_config
@@ -53,8 +61,10 @@ module Flare
       @max_spans = 10_000
       @database_path = nil
       @ignore_request = ->(request) { false }
+      @ignore_errors = DEFAULT_IGNORE_ERRORS.dup
       @subscribe_patterns = DEFAULT_SUBSCRIBE_PATTERNS.dup
       @debug = ENV["FLARE_DEBUG"] == "1"
+      @revision = ENV["FLARE_REVISION"]
       @http_metrics_config = HttpMetricsConfig::DEFAULT
 
       # Environment-based defaults:
@@ -106,6 +116,24 @@ module Flare
         @http_metrics_config = @http_metrics_config.dup
       end
       yield @http_metrics_config
+    end
+
+    # The deployed revision, usually a git SHA, sent so Flare can mark deploys.
+    # Defaults to FLARE_REVISION; when neither is set, the first read asks
+    # Flare::Revision (platform variables, a REVISION file, then git).
+    def revision
+      return @revision if @revision_resolved
+
+      # Flag after the value, so a racing reader never sees the unresolved one.
+      # Two first readers may both resolve; they get the same answer.
+      @revision = Revision.resolve(@revision)
+      @revision_resolved = true
+      @revision
+    end
+
+    def revision=(value)
+      @revision_resolved = false
+      @revision = value
     end
 
     private

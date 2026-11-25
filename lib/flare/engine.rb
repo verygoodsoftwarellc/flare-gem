@@ -27,8 +27,9 @@ module Flare
 
     # Phase 2: Start background threads after all initializers have run
     # so user config (metrics_enabled, tracing_enabled, flush_interval,
-    # tracing_poll_interval, etc.) is applied.
+    # tracing_poll_interval, subscribe_patterns, etc.) is applied.
     config.after_initialize do
+      Flare.subscribe_to_custom_patterns
       Flare.start_rule_manager
       Flare.start_metrics_flusher
     end

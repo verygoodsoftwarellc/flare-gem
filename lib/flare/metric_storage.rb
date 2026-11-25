@@ -12,16 +12,16 @@ module Flare
       @pid = $$
     end
 
-    def increment(key, duration_ms:, error: false)
+    def increment(key, duration_ms:, error: false, slow: false)
       detect_forking
       counter = @storage.compute_if_absent(key) { MetricCounter.new }
-      counter.increment(duration_ms: duration_ms, error: error)
+      counter.increment(duration_ms: duration_ms, error: error, slow: slow)
     end
 
-    def add(key, count:, sum_ms:, error_count: 0)
+    def add(key, count:, sum_ms:, error_count: 0, slow_count: 0)
       detect_forking
       counter = @storage.compute_if_absent(key) { MetricCounter.new }
-      counter.add(count: count, sum_ms: sum_ms, error_count: error_count)
+      counter.add(count: count, sum_ms: sum_ms, error_count: error_count, slow_count: slow_count)
     end
 
     # Atomically retrieves and clears all metrics.

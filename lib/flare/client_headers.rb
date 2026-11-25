@@ -8,7 +8,8 @@ module Flare
   # Single source of truth for the headers that identify this client and its
   # version to the Flare API. The server parses the gem version out of the
   # User-Agent ("Flare Ruby/X.Y.Z") to gate version-dependent features, and
-  # uses the X-Client-* headers to build a per-client picture.
+  # uses the X-Client-* headers to build a per-client picture. X-Client-Revision
+  # (when one resolves, see Configuration#revision) marks deploys on the charts.
   #
   # Safe to send on any request that targets the Flare API (metrics POST,
   # rules GET, trace-notify POST). Do NOT send these on the presigned R2 blob
@@ -19,8 +20,8 @@ module Flare
   module ClientHeaders
     USER_AGENT = "Flare Ruby/#{Flare::VERSION}"
 
-    def self.to_h
-      {
+    def self.to_h(configuration = Flare.configuration)
+      headers = {
         "User-Agent"                => USER_AGENT,
         "X-Client-Language"         => "ruby",
         "X-Client-Language-Version" => RUBY_VERSION,
@@ -28,6 +29,9 @@ module Flare
         "X-Client-Pid"              => Process.pid.to_s,
         "X-Client-Hostname"         => hostname
       }
+      revision = configuration.revision
+      headers["X-Client-Revision"] = revision if revision
+      headers
     end
 
     def self.hostname

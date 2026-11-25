@@ -129,8 +129,11 @@ module Flare
       span_data.name&.start_with?("Flare::")
     end
 
+    # Stored in UTC because readers compare and sort these as strings, which only
+    # works when every row has the same offset. Local time breaks that at a clock
+    # change: 1:05 after falling back sorts before the 1:50 that came earlier.
     def create_span(span_data)
-      now = Time.now.iso8601(6)
+      now = Time.now.utc.iso8601(6)
 
       sql = <<~SQL
         INSERT INTO flare_spans (name, kind, span_id, trace_id, parent_span_id, start_timestamp, end_timestamp, total_recorded_links, total_recorded_events, total_recorded_properties, created_at, updated_at)
@@ -163,8 +166,8 @@ module Flare
     end
 
     def create_event(span_record_id, span_event)
-      now = Time.now.iso8601(6)
-      timestamp = span_event.timestamp ? Time.at(span_event.timestamp / 1_000_000_000.0).iso8601(6) : now
+      now = Time.now.utc.iso8601(6)
+      timestamp = span_event.timestamp ? Time.at(span_event.timestamp / 1_000_000_000.0).utc.iso8601(6) : now
 
       sql = <<~SQL
         INSERT INTO flare_events (span_id, name, created_at, updated_at)
@@ -179,7 +182,7 @@ module Flare
     def create_properties(owner_type, owner_id, attributes)
       return unless attributes
 
-      now = Time.now.iso8601(6)
+      now = Time.now.utc.iso8601(6)
 
       sql = <<~SQL
         INSERT INTO flare_properties (key, value, value_type, owner_type, owner_id, created_at, updated_at)

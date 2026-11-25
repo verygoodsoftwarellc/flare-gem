@@ -3,12 +3,124 @@
 require_relative "test_helper"
 require "flare/metric_storage"
 require "flare/metric_span_processor"
+require "flare/slo_manager"
+
+unless defined?(GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError)
+  module GoodJob
+    module ActiveJobExtensions
+      module Concurrency
+        class ConcurrencyExceededError < StandardError; end
+        class ThrottleExceededError < ConcurrencyExceededError; end
+      end
+    end
+  end
+end
 
 class MetricSpanProcessorTest < Minitest::Test
+  class RetryLaterError < StandardError; end
+  class RetrySoonerError < RetryLaterError; end
+
   def setup
     @storage = Flare::MetricStorage.new
     @http_config = Flare::HttpMetricsConfig.new
-    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+    @processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS)
+  end
+
+  def test_sql_metric_names_ignore_words_inside_values_and_comments
+    {
+      "SELECT 'x from hunter2' AS a FROM posts" => ["posts", "SELECT"],
+      "UPDATE posts SET title = 'y into hunter2' WHERE id = 1" => ["posts", "UPDATE"],
+      "/* hunter2 */ SELECT 1 FROM posts" => ["posts", "SELECT"],
+      "SELECT 'unterminated from hunter2" => ["primary", "SELECT"],
+    }.each do |statement, (target, operation)|
+      @processor.on_end(MockSpan.new(
+        kind: :internal,
+        parent_span_id: "abc",
+        attributes: { "db.system" => "sqlite", "db.name" => "primary", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+
+      key = @storage.drain.keys.first
+      assert_equal [target, operation], [key.target, key.operation], statement
+    end
+  end
+
+  def test_non_sql_systems_get_no_names_from_the_statement
+    {
+      { "db.system" => "clickhouse", "db.statement" => "SELECT 'x from hunter2' FROM events" } => ["events", "SELECT"],
+      { "db.system" => "cassandra", "db.statement" => "SELECT * FROM events WHERE a = 'x'" } => ["events", "SELECT"],
+      { "db.system" => "snowflake", "db.statement" => %(SELECT 1 FROM "hunter2") } => ["unknown", "SELECT"],
+      { "db.system" => "mongodb", "db.operation" => "find", "db.mongodb.collection" => "users", "db.statement" => %({"filter":{"a":"?"}}) } => ["users", "FIND"],
+      { "db.system" => "mongodb", "db.statement" => %({"find":"hunter2"}) } => ["unknown", "query"],
+      { "db.system" => "couchbase", "db.statement" => %({"a":"hunter2"}) } => ["unknown", "query"],
+      { "db.system" => "mystery", "db.statement" => "hunter2 x" } => ["unknown", "query"],
+      { "db.system" => "etcd", "db.statement" => "PUT x", "db.operation" => "hunter2 x" } => ["unknown", "PUT"],
+      { "db.system" => "etcd", "db.operation" => "get" } => ["unknown", "GET"],
+      { "db.system" => "etcd", "db.operation" => "secret word" } => ["unknown", "query"],
+      { "db.system" => "etcd", "db.name" => "main", "db.statement" => "GET x" } => ["main", "GET"],
+    }.each do |attributes, expected|
+      @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: attributes, start_ns: 0, end_ns: 1_000_000))
+
+      key = @storage.drain.keys.first
+      assert_equal expected, [key.target, key.operation], attributes.inspect
+    end
+  end
+
+  def test_sqlite_metric_names_survive_double_quoted_names_and_ignore_double_quoted_values
+    {
+      'SELECT "posts".* FROM "posts" WHERE "posts"."id" = ?' => "posts",
+      'INSERT INTO "posts" ("a") VALUES (?)' => "posts",
+      'UPDATE "posts" SET "a" = ?' => "posts",
+      'SELECT "x from hunter2" AS a FROM posts' => "posts",
+    }.each do |statement, target|
+      @processor.on_end(MockSpan.new(kind: :internal, parent_span_id: "abc", attributes: { "db.system" => "sqlite", "db.statement" => statement }, start_ns: 0, end_ns: 1_000_000))
+
+      assert_equal target, @storage.drain.keys.first.target, statement
+    end
+  end
+
+  def test_sql_metric_names_the_table_the_statement_works_on
+    {
+      # Active Record's upsert_all on Postgres, with its updated_at condition.
+      %(INSERT INTO "activities" ("id","name","created_at","updated_at") VALUES (1, 'a', '2026-11-20', '2026-11-20') ON CONFLICT ("id") DO UPDATE SET updated_at=(CASE WHEN (("activities"."name" IS NOT DISTINCT FROM excluded."name")) THEN "activities".updated_at ELSE CURRENT_TIMESTAMP END),"name"=excluded."name" RETURNING "id") => ["activities", "INSERT"],
+      "INSERT INTO `activities` (`id`,`name`) VALUES (1, 'a') ON DUPLICATE KEY UPDATE `name`=VALUES(`name`)" => ["activities", "INSERT"],
+      %(INSERT INTO "archived_posts" SELECT * FROM "posts" WHERE id < 5) => ["archived_posts", "INSERT"],
+      %(UPDATE "posts" SET "rank" = (SELECT COUNT(*) FROM "votes" WHERE votes.post_id = posts.id)) => ["posts", "UPDATE"],
+      %(UPDATE "posts" SET "author_name" = "users"."name" FROM "users" WHERE "users"."id" = "posts"."user_id") => ["posts", "UPDATE"],
+      %(SELECT "templates"."id", (SELECT COALESCE(jsonb_object_agg(format.key, format.value), '{}'::jsonb) FROM jsonb_each("templates"."formats") AS format) AS formats FROM "templates" WHERE "templates"."id" = 1) => ["templates", "SELECT"],
+      %(SELECT EXTRACT(YEAR FROM "posts"."created_at") AS year, COUNT(*) FROM "posts" GROUP BY 1) => ["posts", "SELECT"],
+      %(SELECT COUNT(*) FROM (SELECT DISTINCT "posts"."id" FROM "posts" LIMIT 10) subquery_for_count) => ["posts", "SELECT"],
+      %(DELETE FROM "sessions" WHERE "sessions"."id" IN (SELECT "sessions"."id" FROM "sessions" LIMIT 5)) => ["sessions", "DELETE"],
+      %(WITH RECURSIVE tree AS (SELECT "folders".* FROM "folders" WHERE "folders"."id" = 1 UNION ALL SELECT "folders".* FROM "folders" JOIN tree ON "folders"."parent_id" = tree.id) SELECT * FROM tree) => ["folders", "WITH"],
+    }.each do |statement, (target, operation)|
+      @processor.on_end(MockSpan.new(kind: :internal, parent_span_id: "abc", attributes: { "db.system" => "postgresql", "db.name" => "primary", "db.statement" => statement }, start_ns: 0, end_ns: 1_000_000))
+
+      key = @storage.drain.keys.first
+      assert_equal [target, operation], [key.target, key.operation], statement
+    end
+  end
+
+  def test_http_metric_paths_drop_segments_with_userinfo
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.request.method" => "GET", "http.host" => "api.example.com", "http.target" => "/a/u:hunter2@b/@bob", "http.status_code" => 200 }, start_ns: 0, end_ns: 1_000_000))
+
+    assert_equal "GET /a/:token/@bob", @storage.drain.keys.first.target
+  end
+
+  def test_http_metric_drops_userinfo_and_fragment
+    @http_config.host("api.example.com", :all)
+    @processor.on_end(MockSpan.new(
+      kind: :client,
+      parent_span_id: "abc",
+      attributes: { "http.request.method" => "GET", "http.host" => "user:hunter2@api.example.com", "http.target" => "/items#hunter2", "http.status_code" => 200 },
+      start_ns: 0,
+      end_ns: 1_000_000
+    ))
+
+    key = @storage.drain.keys.first
+    assert_equal "api.example.com", key.service
+    assert_equal "GET /items", key.target
   end
 
   def test_web_request_creates_metric
@@ -208,6 +320,24 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "postgresql", key.service
     assert_equal "users", key.target
     assert_equal "SELECT", key.operation
+  end
+
+  def test_long_statements_name_the_metric_from_their_start_only
+    insert = "INSERT INTO cards (number) VALUES ('#{"sk_cut_secret" * 1_000}')"
+    late_from = "SELECT #{"a, " * 2_000}b FROM late_table"
+
+    [[insert, "cards", "INSERT"], [late_from, "app_db", "SELECT"]].each do |statement, target, operation|
+      @processor.on_finish(MockSpan.new(
+        kind: :client,
+        parent_span_id: "abc123",
+        attributes: { "db.system" => "postgresql", "db.name" => "app_db", "db.statement" => statement },
+        start_ns: 0,
+        end_ns: 1_000_000
+      ))
+      key = @storage.drain.keys.first
+      assert_equal target, key.target
+      assert_equal operation, key.operation
+    end
   end
 
   def test_redis_span_creates_metric
@@ -665,6 +795,27 @@ class MetricSpanProcessorTest < Minitest::Test
 
     key = @storage.drain.keys.first
     assert_equal "custom", key.service
+  end
+
+  # Rails 8's default production cache store.
+  def test_cache_solid_cache_store
+    span = MockSpan.new(
+      kind: :internal,
+      parent_span_id: "abc123",
+      name: "cache_read.active_support",
+      attributes: {
+        "key" => "test:key",
+        "hit" => true,
+        "store" => "SolidCache::Store"
+      },
+      start_ns: 0,
+      end_ns: 1_000_000
+    )
+
+    @processor.on_end(span)
+
+    key = @storage.drain.keys.first
+    assert_equal "solid_cache", key.service
   end
 
   def test_cache_missing_store_uses_unknown
@@ -1139,11 +1290,249 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal "GET *", key.target
   end
 
+  # SLO slow_count tests
+
+  def test_web_over_threshold_counts_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+    assert_equal 0, counter[:error_count]
+  end
+
+  def test_web_under_threshold_not_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 50_000_000)) # 50ms < 100
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_errored_and_slow_counts_error_only
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "web", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    # 500 (error) AND over threshold -> disjoint: error only, not slow.
+    processor.on_end(web_span(status: 500, start_ns: 0, end_ns: 150_000_000))
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:error_count]
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_untracked_when_no_threshold
+    slo = Flare::SloManager.new # empty -> no threshold
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 5_000_000_000)) # very slow
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_no_slo_manager_never_slow
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 5_000_000_000))
+
+    counter = @storage.drain.values.first
+    assert_equal 0, counter[:slow_count]
+  end
+
+  def test_web_per_op_override_applies
+    slo = Flare::SloManager.new
+    slo.update([
+      { "namespace" => "web", "threshold_ms" => 1000 },
+      { "namespace" => "web", "service" => "rails", "target" => "UsersController#show", "threshold_ms" => 100 }
+    ])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    processor.on_end(web_span(status: 200, start_ns: 0, end_ns: 150_000_000)) # 150ms > 100 override
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+  end
+
+  def test_background_over_threshold_counts_slow
+    slo = Flare::SloManager.new
+    slo.update([{ "namespace" => "job", "threshold_ms" => 100 }])
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, http_metrics_config: @http_config, slo_manager: slo)
+
+    span = MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      name: "MyJob process",
+      attributes: { "code.namespace" => "MyJob", "code.function" => "perform", "messaging.system" => "sidekiq" },
+      start_ns: 0,
+      end_ns: 200_000_000 # 200ms > 100
+    )
+
+    processor.on_end(span)
+
+    counter = @storage.drain.values.first
+    assert_equal 1, counter[:slow_count]
+  end
+
+  # slo_failure: the verdict FilteringSpanProcessor uses for failures-only trace rules
+
+  def test_slo_failure_is_slow_for_a_request_over_its_threshold
+    processor = slo_judge("web" => 100)
+
+    assert_equal "slow", processor.slo_failure(web_span(status: 200, start_ns: 0, end_ns: 150_000_000))
+  end
+
+  def test_slo_failure_is_nil_for_a_request_within_its_threshold
+    processor = slo_judge("web" => 100)
+
+    assert_nil processor.slo_failure(web_span(status: 200, start_ns: 0, end_ns: 50_000_000))
+  end
+
+  def test_slo_failure_is_error_for_a_5xx_even_when_it_is_also_slow
+    processor = slo_judge("web" => 100)
+
+    assert_equal "error", processor.slo_failure(web_span(status: 500, start_ns: 0, end_ns: 150_000_000))
+    assert_equal "error", processor.slo_failure(web_span(status: 503, start_ns: 0, end_ns: 10_000_000))
+    assert_nil processor.slo_failure(web_span(status: 404, start_ns: 0, end_ns: 10_000_000))
+  end
+
+  def test_slo_failure_is_slow_for_a_job_over_its_threshold
+    processor = slo_judge("job" => 100)
+    job = MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      attributes: { "code.namespace" => "MyJob", "code.function" => "perform", "messaging.system" => "sidekiq" },
+      start_ns: 0,
+      end_ns: 200_000_000
+    )
+
+    assert_equal "slow", processor.slo_failure(job)
+  end
+
+  def test_slo_failure_honors_ignore_errors_like_error_count
+    processor = Flare::MetricSpanProcessor.new(storage: nil, ignore_errors: ["Throttled"], slo_manager: Flare::SloManager.new)
+
+    assert_nil processor.slo_failure(failed_job_span("Throttled"))
+    assert_equal "error", processor.slo_failure(failed_job_span("RuntimeError"))
+  end
+
+  def test_slo_failure_is_nil_for_spans_that_are_not_requests_or_jobs
+    processor = slo_judge("web" => 1, "job" => 1)
+    query = MockSpan.new(kind: :client, parent_span_id: "p", attributes: { "db.system" => "mysql" }, end_ns: 5_000_000_000)
+    asset = MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 200 }, end_ns: 5_000_000_000)
+
+    assert_nil processor.slo_failure(query)
+    assert_nil processor.slo_failure(asset), "a request that never reached a controller has no SLO"
+  end
+
+  def slo_judge(thresholds)
+    slo = Flare::SloManager.new
+    slo.update(thresholds.map { |namespace, ms| { "namespace" => namespace, "threshold_ms" => ms } })
+    Flare::MetricSpanProcessor.new(storage: nil, http_metrics_config: @http_config, slo_manager: slo)
+  end
+
+  def web_span(status:, start_ns:, end_ns:)
+    MockSpan.new(
+      kind: :server,
+      parent_span_id: nil,
+      attributes: {
+        "http.status_code" => status,
+        "code.namespace" => "UsersController",
+        "code.function" => "show"
+      },
+      start_ns: start_ns,
+      end_ns: end_ns
+    )
+  end
+
+  def test_default_ignores_good_job_concurrency_errors_and_subclasses
+    @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
+    @processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
+
+    assert_equal({ count: 2, sum_ms: 100, error_count: 0, slow_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_exception_not_ignored_still_counts_as_error
+    @processor.on_end(failed_job_span("RuntimeError"))
+
+    assert_equal({ count: 1, sum_ms: 50, error_count: 1, slow_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_error_status_without_exception_event_still_counts_as_error
+    @processor.on_end(failed_job_span(nil))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  # Regression: ISSUE-001 — a retried exception is recorded on the child
+  # enqueue_retry span, so the job's process span only has the status.
+  # Found by /qa on 2026-11-11
+  def test_ignores_retried_exception_named_only_in_the_job_status
+    span = failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError")
+    span.events.clear
+    @processor.on_end(span)
+
+    assert_equal({ count: 1, sum_ms: 50, error_count: 0, slow_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_custom_ignore_errors_match_the_class_and_its_subclasses
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: Flare::Configuration::DEFAULT_IGNORE_ERRORS + [RetryLaterError.name])
+
+    processor.on_end(failed_job_span(RetryLaterError.name))
+    processor.on_end(failed_job_span(RetrySoonerError.name))
+    processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ThrottleExceededError"))
+    processor.on_end(failed_job_span("ArgumentError"))
+
+    assert_equal({ count: 4, sum_ms: 200, error_count: 1, slow_count: 0 }, @storage.drain.values.first)
+  end
+
+  def test_ignore_errors_match_unloadable_classes_by_exact_name
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: ["Missing::RetryError"])
+
+    processor.on_end(failed_job_span("Missing::RetryError"))
+    processor.on_end(failed_job_span("Missing::RetryErrorSubclass"))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  def test_replacing_ignore_errors_counts_every_exception
+    processor = Flare::MetricSpanProcessor.new(storage: @storage, ignore_errors: [])
+
+    processor.on_end(failed_job_span("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"))
+
+    assert_equal 1, @storage.drain.values.first[:error_count]
+  end
+
+  def test_ignore_errors_apply_to_database_and_http_spans
+    exception = exception_event("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError")
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "db.system" => "postgresql", "db.statement" => "SELECT 1 FROM posts" }, status: OpenTelemetry::Trace::Status.error, events: [exception]))
+    @processor.on_end(MockSpan.new(kind: :client, parent_span_id: "abc", attributes: { "http.method" => "GET", "http.host" => "api.example.com" }, status: OpenTelemetry::Trace::Status.error, events: [exception]))
+
+    drained = @storage.drain
+    assert_equal %w[db http], drained.keys.map(&:namespace).sort
+    assert_equal [0, 0], drained.values.map { |counter| counter[:error_count] }
+  end
+
+  def test_configuration_defaults_ignore_errors_without_sharing_the_default_list
+    config = Flare::Configuration.new
+    config.ignore_errors << "MyError"
+
+    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError", "MyError"], config.ignore_errors
+    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"], Flare::Configuration.new.ignore_errors
+  end
+
   # Mock span class for testing
   class MockSpan
-    attr_reader :kind, :parent_span_id, :name, :attributes, :start_timestamp, :end_timestamp, :status
+    attr_reader :kind, :parent_span_id, :name, :attributes, :start_timestamp, :end_timestamp, :status, :events
 
-    def initialize(kind:, parent_span_id:, attributes: {}, start_ns: 0, end_ns: 100_000_000, name: "test_span", status: nil)
+    def initialize(kind:, parent_span_id:, attributes: {}, start_ns: 0, end_ns: 100_000_000, name: "test_span", status: nil, events: nil)
       @kind = kind
       @parent_span_id = parent_span_id
       @name = name
@@ -1151,6 +1540,25 @@ class MetricSpanProcessorTest < Minitest::Test
       @start_timestamp = start_ns
       @end_timestamp = end_ns
       @status = status
+      @events = events
     end
+  end
+
+  private
+
+  def failed_job_span(exception_type)
+    MockSpan.new(
+      kind: :consumer,
+      parent_span_id: nil,
+      name: "ThrottledJob process",
+      attributes: { "code.namespace" => "ThrottledJob", "code.function" => "perform", "messaging.system" => "active_job" },
+      end_ns: 50_000_000,
+      status: OpenTelemetry::Trace::Status.error("Unexpected ActiveJob Error #{exception_type}"),
+      events: exception_type ? [exception_event(exception_type)] : []
+    )
+  end
+
+  def exception_event(exception_type)
+    OpenTelemetry::SDK::Trace::Event.new("exception", { "exception.type" => exception_type, "exception.message" => exception_type })
   end
 end

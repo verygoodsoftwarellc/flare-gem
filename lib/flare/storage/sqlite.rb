@@ -8,22 +8,26 @@ module Flare
     class SQLite < Base
       MISSING_PARENT_ID = "0000000000000000"
 
-      # Rails framework controller prefixes to filter (lowercase/underscored format)
-      RAILS_CONTROLLER_PREFIXES = %w[
-        active_storage/
-        action_mailbox/
-        rails/
-        flare/
+      # Namespaces of the controllers that come with Rails and Flare, as stored
+      # in code.namespace (the controller's class name).
+      RAILS_CONTROLLER_NAMESPACES = %w[
+        ActiveStorage::
+        ActionMailbox::
+        Rails::
+        Flare::
       ].freeze
 
-      def initialize(database_path)
+      # readonly: true opens an existing database as is, without creating
+      # tables, for tools that only inspect spans (like `flare requests`).
+      def initialize(database_path, readonly: false)
         @database_path = database_path
+        @readonly = readonly
         @mutex = Mutex.new
-        @setup = false
+        @setup = readonly
       end
 
       # List root spans that are HTTP requests (for the requests index)
-      def list_requests(status: nil, method: nil, name: nil, origin: nil, limit: 50, offset: 0)
+      def list_requests(status: nil, method: nil, name: nil, origin: nil, sort: nil, limit: 50, offset: 0)
         # Find root spans with kind=server that have http.method property
         conditions = ["s.parent_span_id = ?", "s.kind = ?"]
         values = [MISSING_PARENT_ID, "server"]
@@ -61,17 +65,7 @@ module Flare
           values << "%#{name}%"
         end
 
-        if origin
-          if origin == "rails"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(#{controller_conditions.join(" OR ")})"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          elsif origin == "app"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(controller_prop.value IS NULL OR NOT (#{controller_conditions.join(" OR ")}))"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          end
-        end
+        add_origin_condition(origin, conditions, values)
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
         values << limit
@@ -95,7 +89,7 @@ module Flare
           LEFT JOIN flare_properties action_prop ON action_prop.owner_type = 'Flare::Span' AND action_prop.owner_id = s.id AND action_prop.key = 'code.function'
           #{where_clause}
           AND COALESCE(method_prop.value, method_prop_old.value) IS NOT NULL
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -103,7 +97,7 @@ module Flare
       end
 
       # List root spans that are jobs (for the jobs index)
-      def list_jobs(status: nil, name: nil, limit: 50, offset: 0)
+      def list_jobs(status: nil, name: nil, sort: nil, limit: 50, offset: 0)
         # Find root spans with kind=consumer (ActiveJob processing)
         conditions = ["s.parent_span_id = ?", "s.kind = ?"]
         values = [MISSING_PARENT_ID, "consumer"]
@@ -125,7 +119,7 @@ module Flare
           LEFT JOIN flare_properties job_class_prop ON job_class_prop.owner_type = 'Flare::Span' AND job_class_prop.owner_id = s.id AND job_class_prop.key = 'code.namespace'
           LEFT JOIN flare_properties queue_prop ON queue_prop.owner_type = 'Flare::Span' AND queue_prop.owner_id = s.id AND queue_prop.key = 'messaging.destination'
           #{where_clause}
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -146,36 +140,37 @@ module Flare
       # Transaction statements to filter out from queries list
       TRANSACTION_STATEMENTS = %w[BEGIN COMMIT ROLLBACK].freeze
 
+      # Active Record names its own statements on every adapter, including ones
+      # the list above can't match (SQLite's "BEGIN immediate TRANSACTION",
+      # savepoints, PRAGMA, SHOW and SET).
+      BOOKKEEPING_QUERY_NAMES = %w[TRANSACTION SCHEMA].freeze
+
+      # The queries filter's rule in Ruby, for one span's properties.
+      def self.bookkeeping_query?(properties)
+        BOOKKEEPING_QUERY_NAMES.include?(properties["name"]) ||
+          TRANSACTION_STATEMENTS.include?(properties["db.statement"].to_s.strip.upcase)
+      end
+
       # List spans by category (for the spans listing pages)
-      def list_spans_by_category(category, name: nil, limit: 50, offset: 0)
+      def list_spans_by_category(category, name: nil, sort: nil, limit: 50, offset: 0)
         patterns = SPAN_CATEGORIES[category] || []
         return [] if patterns.empty? && category != "exceptions"
 
         if category == "exceptions"
           # Exceptions are stored as events on spans, not as spans themselves
-          return list_exception_spans(name: name, limit: limit, offset: offset)
+          return list_exception_spans(name: name, sort: sort, limit: limit, offset: offset)
         end
 
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        # Build OR conditions for matching span names
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -195,7 +190,7 @@ module Flare
           LEFT JOIN flare_properties root_action ON root_action.owner_type = 'Flare::Span' AND root_action.owner_id = root.id AND root_action.key = 'code.function'
           #{transaction_join}
           #{where_clause}
-          ORDER BY s.created_at DESC
+          ORDER BY #{span_order(sort)}
           LIMIT ? OFFSET ?
         SQL
 
@@ -213,22 +208,13 @@ module Flare
         conditions = ["s.parent_span_id != ?"]
         values = [MISSING_PARENT_ID]
 
-        pattern_conditions = patterns.map { "s.name LIKE ?" }
-        conditions << "(#{pattern_conditions.join(" OR ")})"
-        patterns.each { |p| values << "%#{p}%" }
+        transaction_join, category_conditions, category_values = category_filter(category)
+        conditions.concat(category_conditions)
+        values.concat(category_values)
 
         if name
           conditions << "s.name LIKE ?"
           values << "%#{name}%"
-        end
-
-        # For queries, exclude transaction statements (BEGIN, COMMIT, ROLLBACK)
-        transaction_join = ""
-        if category == "queries"
-          transaction_join = "LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'"
-          exclusions = TRANSACTION_STATEMENTS.map { "?" }.join(", ")
-          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{exclusions}))"
-          TRANSACTION_STATEMENTS.each { |stmt| values << "\"#{stmt}\"" }
         end
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
@@ -241,6 +227,27 @@ module Flare
         SQL
 
         row ? row["count"] : 0
+      end
+
+      # Older SQLite builds allow 999 bind parameters per statement.
+      ID_BATCH_SIZE = 500
+
+      # Number of SQL query spans in each trace (transaction statements
+      # excluded, like the queries list). Returns { trace_id => count }.
+      def count_queries_by_trace(trace_ids)
+        transaction_join, filter_conditions, filter_values = category_filter("queries")
+
+        conditions = ["s.parent_span_id != ?", *filter_conditions].join(" AND ")
+        rows = query_all_in_batches(trace_ids, after: [MISSING_PARENT_ID, *filter_values]) do |placeholders|
+          <<~SQL
+            SELECT s.trace_id, COUNT(*) as count
+            FROM flare_spans s
+            #{transaction_join}
+            WHERE s.trace_id IN (#{placeholders}) AND #{conditions}
+            GROUP BY s.trace_id
+          SQL
+        end
+        rows.to_h { |row| [row["trace_id"], row["count"]] }
       end
 
       # Find a single span by its database ID
@@ -268,9 +275,9 @@ module Flare
       end
 
       # List spans that have exception events
-      def list_exception_spans(name: nil, limit: 50, offset: 0)
-        conditions = []
-        values = []
+      def list_exception_spans(name: nil, sort: nil, limit: 50, offset: 0)
+        conditions = ["e.name = ?"]
+        values = ["exception"]
 
         if name
           conditions << "e.name LIKE ?"
@@ -300,7 +307,7 @@ module Flare
           LEFT JOIN flare_properties exc_message ON exc_message.owner_type = 'Flare::Event' AND exc_message.owner_id = e.id AND exc_message.key = 'exception.message'
           LEFT JOIN flare_properties exc_stacktrace ON exc_stacktrace.owner_type = 'Flare::Event' AND exc_stacktrace.owner_id = e.id AND exc_stacktrace.key = 'exception.stacktrace'
           #{where_clause}
-          ORDER BY e.created_at DESC
+          ORDER BY #{span_order(sort, "e.created_at DESC")}
           LIMIT ? OFFSET ?
         SQL
 
@@ -308,8 +315,8 @@ module Flare
       end
 
       def count_exception_spans(name: nil)
-        conditions = []
-        values = []
+        conditions = ["e.name = ?"]
+        values = ["exception"]
 
         if name
           conditions << "e.name LIKE ?"
@@ -382,17 +389,7 @@ module Flare
           values << "%#{name}%"
         end
 
-        if origin
-          if origin == "rails"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(#{controller_conditions.join(" OR ")})"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          elsif origin == "app"
-            controller_conditions = RAILS_CONTROLLER_PREFIXES.map { "controller_prop.value LIKE ?" }
-            conditions << "(controller_prop.value IS NULL OR NOT (#{controller_conditions.join(" OR ")}))"
-            RAILS_CONTROLLER_PREFIXES.each { |prefix| values << "%#{prefix}%" }
-          end
-        end
+        add_origin_condition(origin, conditions, values)
 
         where_clause = "WHERE #{conditions.join(" AND ")}"
 
@@ -485,13 +482,12 @@ module Flare
 
       # Load properties for multiple owners at once
       def load_properties_for_ids(owner_type, owner_ids)
-        return {} if owner_ids.empty?
-
-        placeholders = owner_ids.map { "?" }.join(", ")
-        rows = query_all(<<~SQL, [owner_type] + owner_ids)
-          SELECT owner_id, key, value, value_type FROM flare_properties
-          WHERE owner_type = ? AND owner_id IN (#{placeholders})
-        SQL
+        rows = query_all_in_batches(owner_ids, before: [owner_type]) do |placeholders|
+          <<~SQL
+            SELECT owner_id, key, value, value_type FROM flare_properties
+            WHERE owner_type = ? AND owner_id IN (#{placeholders})
+          SQL
+        end
 
         result = Hash.new { |h, k| h[k] = {} }
         rows.each do |row|
@@ -502,13 +498,9 @@ module Flare
 
       # Load events for multiple spans at once
       def load_events_for_spans(span_ids)
-        return {} if span_ids.empty?
-
-        placeholders = span_ids.map { "?" }.join(", ")
-        event_rows = query_all(<<~SQL, span_ids)
-          SELECT * FROM flare_events
-          WHERE span_id IN (#{placeholders})
-        SQL
+        event_rows = query_all_in_batches(span_ids) do |placeholders|
+          "SELECT * FROM flare_events WHERE span_id IN (#{placeholders})"
+        end
 
         # Group events by span_id
         events_by_span = Hash.new { |h, k| h[k] = [] }
@@ -539,7 +531,7 @@ module Flare
       end
 
       def prune(retention_hours:, max_spans:)
-        cutoff = (Time.now - (retention_hours * 3600)).iso8601(6)
+        cutoff = (Time.now - (retention_hours * 3600)).utc.iso8601(6)
 
         # One transaction: a writer between statements could otherwise shift the
         # newest-N window, leaving spans stripped of their properties or orphaned rows.
@@ -694,17 +686,46 @@ module Flare
         db.execute("PRAGMA cache_size=2000")
       end
 
+      # SQL join, conditions and bind values that select a category's spans by
+      # name. Queries also leave out transaction statements and what Active
+      # Record names its own bookkeeping.
+      def category_filter(category)
+        patterns = SPAN_CATEGORIES.fetch(category)
+        conditions = ["(#{patterns.map { "s.name LIKE ?" }.join(" OR ")})"]
+        values = patterns.map { |p| "%#{p}%" }
+        join = ""
+
+        if category == "queries"
+          join = <<~SQL
+            LEFT JOIN flare_properties stmt_prop ON stmt_prop.owner_type = 'Flare::Span' AND stmt_prop.owner_id = s.id AND stmt_prop.key = 'db.statement'
+            LEFT JOIN flare_properties query_name_prop ON query_name_prop.owner_type = 'Flare::Span' AND query_name_prop.owner_id = s.id AND query_name_prop.key = 'name'
+          SQL
+          conditions << "(stmt_prop.value IS NULL OR stmt_prop.value NOT IN (#{TRANSACTION_STATEMENTS.map { "?" }.join(", ")}))"
+          values.concat(TRANSACTION_STATEMENTS.map { |stmt| "\"#{stmt}\"" })
+          conditions << "(query_name_prop.value IS NULL OR query_name_prop.value NOT IN (#{BOOKKEEPING_QUERY_NAMES.map { "?" }.join(", ")}))"
+          values.concat(BOOKKEEPING_QUERY_NAMES.map { |query_name| "\"#{query_name}\"" })
+        end
+
+        [join, conditions, values]
+      end
+
+      # Ties on duration, like an unsorted list, read newest first.
+      def span_order(sort, newest = "s.created_at DESC")
+        sort == "slowest" ? "(s.end_timestamp - s.start_timestamp) DESC, #{newest}" : newest
+      end
+
       # Keyed by path, like SQLiteExporter, so storages for different files on
-      # the same thread don't share a connection.
+      # the same thread don't share a connection. A child must not use its
+      # parent's handle or close it while the parent may still be using it.
       def connection_key
-        :"flare_storage_db_#{@database_path.hash}"
+        :"flare_storage_db_#{$$}_#{@database_path.hash}"
       end
 
       def connection
         Thread.current[connection_key] ||= begin
           dir = File.dirname(@database_path)
           FileUtils.mkdir_p(dir) unless File.directory?(dir)
-          db = ::SQLite3::Database.new(@database_path, results_as_hash: true)
+          db = ::SQLite3::Database.new(@database_path, results_as_hash: true, readonly: @readonly)
           db.busy_timeout = 5000
           db
         end
@@ -722,6 +743,13 @@ module Flare
         setup_database unless @setup
         @mutex.synchronize do
           connection.execute(sql, values)
+        end
+      end
+
+      # Runs the block's SQL once per batch of ids, staying under the bind limit.
+      def query_all_in_batches(ids, before: [], after: [])
+        ids.each_slice(ID_BATCH_SIZE).flat_map do |batch|
+          query_all(yield(batch.map { "?" }.join(", ")), [*before, *batch, *after])
         end
       end
 
@@ -754,6 +782,15 @@ module Flare
           properties: {},
           events: []
         }
+      end
+
+      def add_origin_condition(origin, conditions, values)
+        return unless %w[app rails].include?(origin)
+
+        # Property values are stored as JSON, so a class name starts with a quote.
+        framework = "(#{RAILS_CONTROLLER_NAMESPACES.map { "controller_prop.value LIKE ?" }.join(" OR ")})"
+        conditions << (origin == "rails" ? framework : "(controller_prop.value IS NULL OR NOT #{framework})")
+        values.concat(RAILS_CONTROLLER_NAMESPACES.map { |namespace| "\"#{namespace}%" })
       end
 
       def row_to_request(row)

@@ -33,18 +33,18 @@ class TraceHealthReporterTest < Minitest::Test
     @reporter.record(@storage, bucket: Time.utc(2026, 5, 22, 12, 34, 56))
     drained = @storage.drain
 
-    assert_equal({ count: 3, sum_ms: 0, error_count: 0 }, drained[key("dropped_spans")])
-    assert_equal({ count: 2, sum_ms: 0, error_count: 0 }, drained[key("export_failures")])
-    assert_equal({ count: 1, sum_ms: 0, error_count: 0 }, drained[key("processor_exceptions")])
-    assert_equal({ count: 4, sum_ms: 0, error_count: 0 }, drained[key("upload_url_pool_empty")])
-    assert_equal({ count: 5, sum_ms: 0, error_count: 0 }, drained[key("upload_url_expired")])
-    assert_equal({ count: 6, sum_ms: 0, error_count: 0 }, drained[key("r2_put_failures")])
-    assert_equal({ count: 7, sum_ms: 0, error_count: 0 }, drained[key("notify_failures")])
-    assert_equal({ count: 8, sum_ms: 0, error_count: 0 }, drained[key("trace_pool_empty")])
-    assert_equal({ count: 9, sum_ms: 0, error_count: 0 }, drained[key("trace_export_exceptions")])
-    assert_equal({ count: 1, sum_ms: 12, error_count: 0 }, drained[key("buffer_size")])
-    assert_equal({ count: 1, sum_ms: 20, error_count: 0 }, drained[key("buffer_high_watermark")])
-    assert_equal({ count: 1, sum_ms: 5000, error_count: 0 }, drained[key("buffer_limit")])
+    assert_equal({ count: 3, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("dropped_spans")])
+    assert_equal({ count: 2, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("export_failures")])
+    assert_equal({ count: 1, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("processor_exceptions")])
+    assert_equal({ count: 4, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("upload_url_pool_empty")])
+    assert_equal({ count: 5, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("upload_url_expired")])
+    assert_equal({ count: 6, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("r2_put_failures")])
+    assert_equal({ count: 7, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("notify_failures")])
+    assert_equal({ count: 8, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("trace_pool_empty")])
+    assert_equal({ count: 9, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("trace_export_exceptions")])
+    assert_equal({ count: 1, sum_ms: 12, error_count: 0, slow_count: 0 }, drained[key("buffer_size")])
+    assert_equal({ count: 1, sum_ms: 20, error_count: 0, slow_count: 0 }, drained[key("buffer_high_watermark")])
+    assert_equal({ count: 1, sum_ms: 5000, error_count: 0, slow_count: 0 }, drained[key("buffer_limit")])
     assert_equal 12, @processor.reset_to
   end
 
@@ -57,7 +57,7 @@ class TraceHealthReporterTest < Minitest::Test
     @reporter.record(@storage, bucket: Time.utc(2026, 5, 22, 12, 35, 0))
     drained = @storage.drain
 
-    assert_equal({ count: 2, sum_ms: 0, error_count: 0 }, drained[key("dropped_spans", minute: 35)])
+    assert_equal({ count: 2, sum_ms: 0, error_count: 0, slow_count: 0 }, drained[key("dropped_spans", minute: 35)])
   end
 
   def test_buffer_limit_is_only_reported_when_there_is_buffer_pressure
@@ -70,7 +70,7 @@ class TraceHealthReporterTest < Minitest::Test
     @reporter.record(@storage, bucket: Time.utc(2026, 5, 22, 12, 35, 0))
     drained = @storage.drain
 
-    assert_equal({ count: 1, sum_ms: 5000, error_count: 0 }, drained[key("buffer_limit", minute: 35)])
+    assert_equal({ count: 1, sum_ms: 5000, error_count: 0, slow_count: 0 }, drained[key("buffer_limit", minute: 35)])
   end
 
   def test_buffer_limit_is_reported_with_nonzero_current_buffer
@@ -79,7 +79,7 @@ class TraceHealthReporterTest < Minitest::Test
     @reporter.record(@storage, bucket: Time.utc(2026, 5, 22, 12, 34, 0))
     drained = @storage.drain
 
-    assert_equal({ count: 1, sum_ms: 5000, error_count: 0 }, drained[key("buffer_limit")])
+    assert_equal({ count: 1, sum_ms: 5000, error_count: 0, slow_count: 0 }, drained[key("buffer_limit")])
   end
 
   private
