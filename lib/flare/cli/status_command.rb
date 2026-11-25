@@ -3,6 +3,7 @@
 require_relative "output"
 require_relative "project"
 require_relative "../version"
+require_relative "../configuration"
 
 module Flare
   class StatusCommand
