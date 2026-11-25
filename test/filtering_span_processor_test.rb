@@ -412,6 +412,24 @@ end
     processor&.shutdown(timeout: 1)
   end
 
+  def test_a_new_request_marked_on_a_dropped_trace_id_is_still_kept
+    processor = failures_only_processor(verdict: nil)
+    root = span(trace_id: "t1", span_id: "root", sampled: true, parent_span_id: nil, kind: :consumer,
+                attributes: { Flare::Sampler::RULE_ID_ATTRIBUTE => 7 })
+    processor.on_start(root, nil)
+    processor.on_finish(root)
+
+    @slo_check.verdict = "error"
+    @marker.mark("t1", owner_span_id: "rack", rule_id: 7, judged: true)
+    processor.on_finish(span(trace_id: "t1", span_id: "query", sampled: false, parent_span_id: "rack"))
+    processor.on_finish(span(trace_id: "t1", span_id: "rack", sampled: false, parent_span_id: "remote", kind: :server))
+    processor.force_flush
+
+    assert_equal %w[query rack], @exporter.exports.flatten.map(&:span_id).sort
+  ensure
+    processor&.shutdown(timeout: 1)
+  end
+
   def test_rescues_exporter_exceptions_and_counts_them
     @exporter.raise_with = RuntimeError.new("boom")
     @processor.on_finish(span(trace_id: "t1", span_id: "s1", sampled: true))

@@ -119,6 +119,9 @@ module Flare
       owner_finished = marked && @marker.owner?(ctx.trace_id, ctx.span_id)
 
       return unless sampled || marked
+      # Only an unmarked sampled span can belong to a dropped request: a
+      # marked trace has a new owner and is judged on its own.
+      return if sampled && !marked && dropped?(ctx.trace_id)
 
       span_data = span.respond_to?(:to_span_data) ? span.to_span_data : span
       complete = owner_finished || sampled_completion_span?(span_data)
@@ -283,6 +286,10 @@ module Flare
       @dropped_traces[trace_id] = true
     end
 
+    def dropped?(trace_id)
+      @mutex.synchronize { @dropped_traces.key?(trace_id) }
+    end
+
     def with_capture_reason(span_data, reason)
       tagged = span_data.dup
       tagged.attributes = (span_data.attributes || {}).merge(Sampler::CAPTURE_REASON_ATTRIBUTE => reason).freeze
@@ -291,7 +298,7 @@ module Flare
 
     def enqueue(span_data, complete:, delay: 0)
       @mutex.synchronize do
-        return if @stopped || @dropped_traces.key?(span_data.trace_id)
+        return if @stopped
 
         trace_id = span_data.trace_id
         @trace_order << trace_id unless @pending_by_trace.key?(trace_id)
