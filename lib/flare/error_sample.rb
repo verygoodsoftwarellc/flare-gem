@@ -25,17 +25,22 @@ module Flare
     CODE_NAME = /(?<=method |variable |constant )[`'][A-Za-z_][\w:]*[?!=]?'/
     # A quote right after a letter is an apostrophe ("Couldn't"), not a value.
     # One that never closes (or was cut off) masks to the end, like SqlMask.
-    QUOTED = /(?<!\w)(?:"(?:[^"\\]|\\.)*+(?:"|\z)|'(?:[^'\\]|\\.)*+(?:'|\z)|`(?:[^`\\]|\\.)*+(?:`|\z))/m
-    # Whatever follows "=": Postgres' "Key (email)=(a@b.c)", "token=abc".
-    ASSIGNED = /(?<==)(?:\([^)]*+\)?|[^\s,;)\]}]+)/
+    # A lone backslash at the end counts as part of the value.
+    QUOTED = /(?<!\w)(?:"(?:[^"\\]|\\.?)*+(?:"|\z)|'(?:[^'\\]|\\.?)*+(?:'|\z)|`(?:[^`\\]|\\.?)*+(?:`|\z))/m
+    # Whatever follows "=": Postgres' "Key (email)=(a@b.c)", "token = abc".
+    # A parenthesized value runs to the last ")" on its line, since the value
+    # itself can hold one.
+    ASSIGNED = /(?<==)[ \t]*(?:\([^\n]*\)|\([^\n]*|[^\s,;)\]}]+)/
     EMAIL = /[\w.+%-]+@[\w-]+(?:\.[\w-]+)+/
     UUID = /\h{8}-\h{4}-\h{4}-\h{4}-\h{12}/
     # Hex ids and digests: 8+ hex chars with both a digit and a letter.
     HEX = /\b(?:0x)?(?=\h*\d)(?=\h*[a-f])\h{8,}\b/i
     NUMBER = /-?\d+(?:\.\d+)?/
     VALUES = /(?<code>#{CODE_NAME})|#{QUOTED}|#{ASSIGNED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
-    # Param keys are usually identifiers. Anything else may be data.
-    PARAM_KEY = /\A[\w\-.]{1,100}\z/
+    # Param keys are usually identifiers. Anything else, or an identifier
+    # that's really an id or digest, may be data.
+    PARAM_KEY = /\A[A-Za-z_][\w\-.]{0,99}\z/
+    ID_KEY = /\A(?:#{UUID}|#{HEX})\z/
 
     module_function
 
@@ -74,7 +79,7 @@ module Flare
         break if names.size >= MAX_PARAM_NAMES
 
         key = key.to_s
-        key = MASK unless key.match?(PARAM_KEY)
+        key = MASK if !key.match?(PARAM_KEY) || key.match?(ID_KEY)
         name = prefix ? "#{prefix}[#{key}]" : key
         next if prefix.nil? && %w[controller action].include?(name)
 

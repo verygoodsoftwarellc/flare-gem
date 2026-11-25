@@ -21,13 +21,20 @@ class ErrorSampleTest < Minitest::Test
     assert_equal "Key (email)=? already exists.", Flare::ErrorSample.scrub_message("Key (email)=(jane smith) already exists.")
     assert_equal "login failed token=? for user", Flare::ErrorSample.scrub_message("login failed token=abcXYZ for user")
 
+    assert_equal "bad value ?", Flare::ErrorSample.scrub_message("bad value 'hunter2\\")
+    assert_equal "Key (a, b)=? already exists.", Flare::ErrorSample.scrub_message("Key (a, b)=(1, x) y) already exists.")
+    assert_equal "password =? rejected", Flare::ErrorSample.scrub_message("password = hunter2 rejected")
+
     cut = Flare::ErrorSample.scrub_message("#{"x" * 4_000} 'secret #{"y" * 200}' tail")
     refute_includes cut, "y"
   end
 
   def test_param_names_mask_keys_that_are_not_identifiers
-    names = Flare::ErrorSample.param_names("jane@example.com" => "1", "user" => { "has space" => "x", "ok_key" => "y" })
-    assert_equal ["?", "user[?]", "user[ok_key]"], names
+    names = Flare::ErrorSample.param_names(
+      "jane@example.com" => "1", "12345" => "2", "9f86d081884c7d65" => "3",
+      "user" => { "has space" => "x", "ok_key" => "y" }
+    )
+    assert_equal ["?", "?", "?", "user[?]", "user[ok_key]"], names
   end
 
   def test_scrub_message_keeps_method_and_constant_names
