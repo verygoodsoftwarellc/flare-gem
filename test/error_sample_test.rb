@@ -41,9 +41,22 @@ class ErrorSampleTest < Minitest::Test
     assert_equal ["?", "?", "?", "user[?]", "user[ok_key]"], names
   end
 
-  def test_scrub_message_keeps_method_and_constant_names
-    assert_equal "undefined method 'full_name' for nil", Flare::ErrorSample.scrub_message("undefined method 'full_name' for nil")
-    assert_equal "undefined method `full_name' for nil:NilClass", Flare::ErrorSample.scrub_message("undefined method `full_name' for nil:NilClass")
+  def test_scrub_message_keeps_only_plain_words
+    assert_equal "Validation failed: Email has already been taken",
+                 Flare::ErrorSample.scrub_message("Validation failed: Email has already been taken")
+    assert_equal "nil? called on (thing), don't retry!", Flare::ErrorSample.scrub_message("nil? called on (thing), don't retry!")
+    assert_equal "charge failed for card ? owned by ? via ?=?",
+                 Flare::ErrorSample.scrub_message("charge failed for card 4242424242424242 owned by bob@example.com via https://x.test/a?b=c")
+    assert_equal "file ? missing for ?", Flare::ErrorSample.scrub_message("file /tmp/report-7.csv missing for v2")
+    assert_equal "line one\n? two", Flare::ErrorSample.scrub_message("line one\nacct#9 two")
+  end
+
+  def test_scrub_message_masks_quoted_method_and_constant_names_too
+    assert_equal "undefined method ? for nil", Flare::ErrorSample.scrub_message("undefined method 'full_name' for nil")
+    # Ruby < 3.4 opens with a backtick that never closes, so the rest goes too.
+    assert_equal "undefined method ?", Flare::ErrorSample.scrub_message("undefined method `full_name' for nil:NilClass")
+    assert_equal "undefined method ? for ?", Flare::ErrorSample.scrub_message("undefined method 'full_name' for nil:NilClass")
+    assert_equal "uninitialized constant ?", Flare::ErrorSample.scrub_message("uninitialized constant Foo::Bar")
   end
 
   def test_scrub_message_cuts_long_messages

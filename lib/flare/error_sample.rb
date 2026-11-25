@@ -10,8 +10,8 @@ require_relative "version"
 
 module Flare
   # One stored copy of an error occurrence, uploaded to R2 the first time a
-  # process sees a fingerprint. No values leave the process: the message has
-  # numbers, emails and quoted strings masked, and params are names only.
+  # process sees a fingerprint. No values leave the process: the message keeps
+  # only plain words, and params are names only.
   module ErrorSample
     MAX_FRAMES = 200
     MAX_BYTES = 256 * 1024
@@ -20,36 +20,50 @@ module Flare
     MAX_NAME_BYTES = 200
     MASK = "?"
 
-    # A quoted identifier right after "method", "variable" or "constant" names
-    # code ("undefined method 'name' for nil"), not data, so it stays.
-    CODE_NAME = /(?<=method |variable |constant )[`'][A-Za-z_][\w:]*[?!=]?'/
-    # A quote right after a letter is an apostrophe ("Couldn't"), not a value.
-    # One that never closes (or was cut off) masks to the end, like SqlMask.
-    # A lone backslash at the end counts as part of the value.
+    # Messages keep plain words and mask every other token, so a value can't
+    # slip through a pattern nobody thought of: "Couldn't find User with
+    # 'id'=123" -> "Couldn't find User with ?=?". A plain word is letters
+    # (with _ and inner apostrophes or hyphens), plus sentence punctuation
+    # around it.
+    PLAIN_WORD = /\A[\p{L}_]+(?:['’-][\p{L}_]+)*\z/
+    LEADING = /\A[(\[{]*/
+    TRAILING = /[.,;:!?)\]}]*\z/
+    # Plain words can still be data when they're quoted or assigned, so those
+    # are masked whole first. A quote right after a letter is an apostrophe
+    # ("Couldn't"). One that never closes (or was cut off) masks to the end; a
+    # lone backslash at the end counts as part of it.
     QUOTED = /(?<!\w)(?:"(?:[^"\\]|\\.?)*+(?:"|\z)|'(?:[^'\\]|\\.?)*+(?:'|\z)|`(?:[^`\\]|\\.?)*+(?:`|\z))/m
-    # Whatever follows "=": Postgres' "Key (email)=(a@b.c)", "token = abc".
-    # A quoted value is masked whole. A parenthesized one runs to the last ")"
-    # in the message (the value can hold one or span lines), or to the end.
+    # Whatever follows "=": Postgres' "Key (email)=(jane smith)", "token = abc".
+    # A parenthesized value runs to the last ")" in the message (the value can
+    # hold one or span lines), or to the end.
     ASSIGNED = /(?<==)[ \t]*(?:#{QUOTED}[^\s,;)\]}]*|\((?m:.*)\)|\((?m:.*)|[^\s,;)\]}]+)/
-    EMAIL = /[\w.+%-]+@[\w-]+(?:\.[\w-]+)+/
-    UUID = /\h{8}-\h{4}-\h{4}-\h{4}-\h{12}/
-    # Hex ids and digests: 8+ hex chars with both a digit and a letter.
-    HEX = /\b(?:0x)?(?=\h*\d)(?=\h*[a-f])\h{8,}\b/i
-    NUMBER = /-?\d+(?:\.\d+)?/
-    VALUES = /(?<code>#{CODE_NAME})|#{ASSIGNED}|#{QUOTED}|#{EMAIL}|#{UUID}|#{HEX}|#{NUMBER}/
+    QUOTED_OR_ASSIGNED = /#{ASSIGNED}|#{QUOTED}/
+
     # Param keys are usually identifiers. Anything else, or an identifier
     # that's really an id or digest, may be data.
     PARAM_KEY = /\A[A-Za-z_][\w\-.]{0,99}\z/
-    ID_KEY = /\A(?:#{UUID}|#{HEX})\z/
+    ID_KEY = /\A(?:\h{8}-\h{4}-\h{4}-\h{4}-\h{12}|(?:0x)?(?=\h*\d)(?=\h*[a-f])\h{8,})\z/i
 
     module_function
 
-    # Same idea as SqlMask, for free text: values out, wording kept.
     def scrub_message(message)
       text = UTF8.scrub(message.to_s)
       text = "#{text.byteslice(0, MAX_MESSAGE_BYTES).scrub("")} ..." if text.bytesize > MAX_MESSAGE_BYTES
 
-      text.gsub(VALUES) { |match| Regexp.last_match(:code) ? match : MASK }
+      text.gsub(QUOTED_OR_ASSIGNED, MASK).gsub(/\S+/) do |token|
+        token.split(/(=)/).map { |part| part == "=" ? part : scrub_word(part) }.join
+      end
+    end
+
+    # A word with its punctuation: kept when plain or already masked.
+    def scrub_word(word)
+      lead = word[LEADING]
+      rest = word.delete_prefix(lead)
+      trail = rest[TRAILING]
+      core = rest.delete_suffix(trail)
+      return word if core.empty? || core == MASK || core.match?(PLAIN_WORD)
+
+      "#{lead}#{MASK}#{trail}"
     end
 
     # Up to MAX_FRAMES frames. Every app frame stays; when there are too many,
