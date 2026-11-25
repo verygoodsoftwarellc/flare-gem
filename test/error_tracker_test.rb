@@ -165,6 +165,14 @@ class ErrorTrackerTest < Minitest::Test
     assert_equal 100, flush.keys.first.service.length
   end
 
+  # POST /api/metrics rejects the whole request when operation is over 100.
+  def test_operation_is_truncated_to_100
+    enable
+    @tracker.report(raised, handled: false, context: { operation: "A" * 300 })
+
+    assert_equal 100, flush.keys.first.operation.length
+  end
+
   def test_at_most_100_fingerprints_per_flush
     enable
     150.times do |i|
