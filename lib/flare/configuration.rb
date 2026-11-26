@@ -39,8 +39,10 @@ module Flare
     # Exceptions Flare ignores: they don't count as failures in metrics and
     # don't become errors. Subclasses match too. GoodJob raises its entry to
     # wait its turn; the rest are Honeybadger's noise defaults (bad routes,
-    # missing records, bad tokens, malformed requests), all of which render
-    # a 4xx. A request that returns a 5xx always counts as a failure.
+    # missing records, bad tokens, malformed requests). A request that
+    # returns a 5xx still counts as a failure in metrics, so
+    # ActionController::NotImplemented (501) counts as a failed request but,
+    # as a subclass of MethodNotAllowed, is still ignored as an error.
     DEFAULT_IGNORE_ERRORS = %w[
       AbstractController::ActionNotFound
       ActionController::BadRequest
