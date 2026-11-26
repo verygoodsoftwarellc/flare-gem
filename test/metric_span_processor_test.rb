@@ -1497,6 +1497,15 @@ class MetricSpanProcessorTest < Minitest::Test
     assert_equal [0, 0], drained.values.map { |counter| counter[:error_count] }
   end
 
+  def test_ignore_errors_apply_to_web_5xx_responses
+    web = ->(events) { MockSpan.new(kind: :server, parent_span_id: nil, attributes: { "http.status_code" => 501, "code.namespace" => "UsersController", "code.function" => "show" }, events: events) }
+    @processor.on_end(web.call([exception_event("GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError")]))
+    @processor.on_end(web.call([exception_event("ArgumentError")]))
+    @processor.on_end(web.call([]))
+
+    assert_equal 2, @storage.drain.values.first[:error_count]
+  end
+
   def test_configuration_defaults_ignore_errors_without_sharing_the_default_list
     config = Flare::Configuration.new
     config.ignore_errors << "MyError"
