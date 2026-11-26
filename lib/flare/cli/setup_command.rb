@@ -52,8 +52,11 @@ module Flare
         #   request.path.start_with?("/health")
         # }
 
-        # Exceptions (and subclasses) that don't count as errors in metrics.
+        # Exceptions (and subclasses) Flare ignores: they don't count as
+        # failures in metrics and don't become errors. The defaults cover
+        # routing errors, missing records, bad tokens and the like.
         # config.ignore_errors << "MyApp::RetryLaterError"
+        # config.ignore_errors.delete("ActiveRecord::RecordNotFound")
 
         # ── Metrics (remote monitoring) ────────────────────────────────────
         # Metrics aggregate span data into counts, durations, and error rates.

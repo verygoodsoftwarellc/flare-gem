@@ -136,18 +136,25 @@ class ErrorTrackerTest < Minitest::Test
     enable
     @configuration.ignore_errors = [NotFoundError.name]
     refute @tracker.report(raised_with(MissingThingError), handled: false)
-
-    @configuration.ignore_errors = []
-    @configuration.error_tracking_ignores = [NotFoundError.name]
     refute @tracker.report(raised_with(NotFoundError), handled: false)
     assert @tracker.report(raised, handled: false)
   end
 
   def test_default_noise_is_ignored
-    assert_includes Flare::Configuration::DEFAULT_ERROR_TRACKING_IGNORES, "ActionController::RoutingError"
-    assert_includes Flare::Configuration::DEFAULT_ERROR_TRACKING_IGNORES, "ActiveRecord::RecordNotFound"
-    assert_includes Flare::Configuration::DEFAULT_ERROR_TRACKING_IGNORES, "ActionController::InvalidAuthenticityToken"
-    refute_includes Flare::Configuration::DEFAULT_IGNORE_ERRORS, "ActiveRecord::RecordNotFound"
+    defaults = Flare::Configuration::DEFAULT_IGNORE_ERRORS
+    assert_includes defaults, "ActionController::RoutingError"
+    assert_includes defaults, "ActiveRecord::RecordNotFound"
+    assert_includes defaults, "ActionController::InvalidAuthenticityToken"
+    assert_includes defaults, "GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"
+  end
+
+  def test_removing_a_default_counts_it_again
+    enable
+    @configuration.ignore_errors = Flare::Configuration::DEFAULT_IGNORE_ERRORS + [NotFoundError.name]
+    refute @tracker.report(raised_with(NotFoundError), handled: false)
+
+    @configuration.ignore_errors.delete(NotFoundError.name)
+    assert @tracker.report(raised_with(NotFoundError), handled: false)
   end
 
   def test_cache_store_sources_are_skipped

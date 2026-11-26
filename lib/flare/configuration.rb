@@ -10,7 +10,6 @@ module Flare
     attr_accessor :max_spans
     attr_accessor :ignore_request
     attr_accessor :ignore_errors
-    attr_accessor :error_tracking_ignores
     attr_writer :database_path
 
     # Spans: detailed trace data stored in SQLite (default: development only)
@@ -37,17 +36,11 @@ module Flare
 
     attr_accessor :subscribe_patterns
 
-    # Exceptions that jobs raise to wait or retry rather than to fail. A span
-    # that ends with one of these (or a subclass) counts as a success.
+    # Exceptions Flare ignores: they don't count as failures in metrics and
+    # don't become errors. Subclasses match too. GoodJob raises its entry to
+    # wait its turn; the rest are Honeybadger's noise defaults (bad routes,
+    # missing records, bad tokens, malformed requests).
     DEFAULT_IGNORE_ERRORS = %w[
-      GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
-    ].freeze
-
-    # Noise error tracking skips on top of ignore_errors, like Honeybadger's
-    # defaults: bad routes, missing records, bad tokens and malformed
-    # requests. Kept apart from ignore_errors so turning error tracking on
-    # doesn't change how metrics count failed jobs.
-    DEFAULT_ERROR_TRACKING_IGNORES = %w[
       AbstractController::ActionNotFound
       ActionController::BadRequest
       ActionController::InvalidAuthenticityToken
@@ -63,6 +56,7 @@ module Flare
       ActionDispatch::Http::Parameters::ParseError
       ActiveRecord::RecordNotFound
       CGI::Session::CookieStore::TamperedWithCookie
+      GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
       Mongoid::Errors::DocumentNotFound
       Rack::QueryParser::InvalidParameterError
       Rack::QueryParser::ParameterTypeError
@@ -85,7 +79,6 @@ module Flare
       @database_path = nil
       @ignore_request = ->(request) { false }
       @ignore_errors = DEFAULT_IGNORE_ERRORS.dup
-      @error_tracking_ignores = DEFAULT_ERROR_TRACKING_IGNORES.dup
       @subscribe_patterns = DEFAULT_SUBSCRIBE_PATTERNS.dup
       @debug = ENV["FLARE_DEBUG"] == "1"
       @revision = ENV["FLARE_REVISION"]

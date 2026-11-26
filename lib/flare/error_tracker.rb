@@ -330,7 +330,7 @@ module Flare
     end
 
     def ignored?(error)
-      ignored = Array(@configuration.ignore_errors) + Array(@configuration.error_tracking_ignores)
+      ignored = Array(@configuration.ignore_errors)
       return false if ignored.empty?
 
       error.class.ancestors.any? { |ancestor| ignored.include?(ancestor.name) }
