@@ -152,7 +152,7 @@ end
 
 ### Ignored errors
 
-`config.ignore_errors` is the one list of exceptions Flare ignores: they don't count as failures in metrics and don't become errors. A subclass of a listed class is ignored too. A span that ends with one still counts toward throughput and duration, just not the error rate, and traces still record the exception.
+`config.ignore_errors` is the one list of exceptions Flare ignores: they don't count as failures in metrics and don't become errors. A subclass of a listed class is ignored too. A span that ends with one still counts toward throughput and duration, just not the error rate, and traces still record the exception. A request that returns a 5xx always counts as failed.
 
 The defaults cover noise (routing errors, `ActiveRecord::RecordNotFound`, invalid authenticity tokens, malformed params and the like, see `Flare::Configuration::DEFAULT_IGNORE_ERRORS`) and control flow: a GoodJob job with `perform_limit` or `perform_throttle` raises `GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError` (or its subclass `ThrottleExceededError`) to wait its turn, then retries.
 

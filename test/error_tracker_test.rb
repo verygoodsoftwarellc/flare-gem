@@ -146,6 +146,7 @@ class ErrorTrackerTest < Minitest::Test
     assert_includes defaults, "ActiveRecord::RecordNotFound"
     assert_includes defaults, "ActionController::InvalidAuthenticityToken"
     assert_includes defaults, "GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"
+    refute_includes defaults, "ActionController::NotImplemented" # renders a 501, which metrics count
   end
 
   def test_removing_a_default_counts_it_again

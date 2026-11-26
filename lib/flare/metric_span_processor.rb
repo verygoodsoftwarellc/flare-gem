@@ -332,9 +332,7 @@ module Flare
     def http_error?(span)
       status = span.attributes["http.status_code"] || span.attributes["http.response.status_code"]
       code = status.to_i
-      return span_error?(span) if code.zero?
-
-      code >= 500 && !ignored_exception?(span)
+      code >= 500 || (code.zero? && span_error?(span))
     end
 
     def http_status_class(span)
@@ -351,15 +349,10 @@ module Flare
 
     def span_error?(span)
       return false if span.status&.code != OpenTelemetry::Trace::Status::ERROR
-
-      !ignored_exception?(span)
-    end
-
-    def ignored_exception?(span)
-      return false if @ignore_errors.empty?
+      return true if @ignore_errors.empty?
 
       type = exception_type(span)
-      !type.nil? && ignored_exception_type?(type)
+      type.nil? || !ignored_exception_type?(type)
     end
 
     def exception_type(span)
