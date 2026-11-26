@@ -36,6 +36,10 @@ Metrics are lightweight aggregated counters computed from spans in-memory. The `
 
 The `MetricFlusher` drains the storage every 60s and the `MetricSubmitter` posts gzipped JSON to `POST {url}/api/metrics` with `Authorization: Bearer {FLARE_KEY}`. Only runs if both `url` and `key` are configured.
 
+### Errors (off until the server turns them on)
+
+Error tracking is inert unless the last `/api/rules` response said `error_tracking: true`. `ErrorTracker` gets errors from `Rails.error` (subscribed after initializers), `Flare.report(e, context: {})`, and failed web/job spans whose exception the reporter didn't see (`ErrorTracker::SpanExceptionCapture` is prepended to the OTel SDK span to keep the exception object). Each exception object counts once. Fingerprint = class + top 3 app frames, file and method only (`error_fingerprint.rb`). Counts flush with metrics as namespace `error` rows (service = class, target = fingerprint, operation = where, error_count = unhandled), max 100 fingerprints per flush. One sample per new fingerprint waits (max 20); the rules poll asks for URLs with `Flare-Error-Samples`, then `ErrorUploader` PUTs to R2 and POSTs `/api/errors`. `config.ignore_errors` is the one ignore list for both errors and metrics; its defaults include Honeybadger-style noise (routing errors, `RecordNotFound`, …).
+
 ### Fork Safety
 
 The gem detects forking (Puma workers, Passenger, etc.) inline on every span end. When `$$` changes, it calls `Flare.after_fork` which restarts the `MetricFlusher` timer thread. Same pattern as Flipper.
@@ -160,6 +164,8 @@ Tests use Minitest. The test helper loads core library classes directly without 
 - `lib/flare/sql_mask.rb` - one-pass scan that takes the values out of a SQL statement
 - `lib/flare/store_statement.rb` - shape of Redis and MongoDB statements with values taken out
 - `lib/flare/redis_statement_processor.rb` - applies that shape to Redis spans as they start
+- `lib/flare/error_tracker.rb` - error counts, dedupe, held samples, the on/off gate, Rails.error subscriber
+- `lib/flare/error_fingerprint.rb`, `error_sample.rb`, `error_uploader.rb` - fingerprints, scrubbed samples, R2 upload + notify
 - `lib/flare/source_location.rb` - finds app code location that triggered a span
 - `app/` - Rails engine controllers/views for the dashboard UI
 - `config/routes.rb` - engine routes (requests, jobs, spans by category)

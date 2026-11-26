@@ -7,6 +7,7 @@ require "concurrent/atomic/atomic_fixnum"
 
 require_relative "client_headers"
 require_relative "http_transport"
+require_relative "error_tracker"
 
 module Flare
   # The SDK's only poll. Every interval seconds (default 30) it does a
@@ -30,11 +31,13 @@ module Flare
     attr_reader :poll_count, :etag, :stopped_due_to_auth, :last_error_count
 
     def initialize(sampler:, marker:, pool:, base_url:, api_key:, project:, environment:,
-                   slo_manager: nil, interval: DEFAULT_INTERVAL, transport: nil, logger: nil)
+                   slo_manager: nil, error_tracker: nil, interval: DEFAULT_INTERVAL, transport: nil, logger: nil)
       @sampler     = sampler
       @marker      = marker
       @pool        = pool
       @slo_manager = slo_manager
+      @error_tracker = error_tracker
+      @requested_samples = []
       @rules_url   = "#{base_url.to_s.chomp('/')}/api/rules"
       @api_key     = api_key
       @project     = project
@@ -126,12 +129,18 @@ module Flare
         "Flare-Environment" => @environment
       )
       headers["If-None-Match"] = @etag if @etag
+      # Asks for upload URLs for waiting error samples. Left off when none
+      # wait, so an unchanged poll still gets a 304.
+      @requested_samples = @error_tracker ? @error_tracker.sample_request : []
+      headers[ErrorTracker::SAMPLES_HEADER] = @requested_samples.join(",") unless @requested_samples.empty?
       headers
     end
 
     # Server payload shape (see tirana-v2 Api::RulesController):
     #   { "trace_rules": [{ "id", "match_attributes", "rate", ..., "urls": [...] }],
-    #     "slo_rules": [{ "namespace", "service"?, "target"?, "threshold_ms" }] }
+    #     "slo_rules": [{ "namespace", "service"?, "target"?, "threshold_ms" }],
+    #     "error_tracking": true,
+    #     "error_uploads": [{ "fingerprint", "upload_id", "key", "put_url", "expires_at" }] }
     # The `slo_rules` key is optional; the rules poll is authoritative, so an
     # absent array clears any prior SLO config (update treats nil as empty).
     def apply(payload)
@@ -142,6 +151,8 @@ module Flare
       @pool.replace(url_entries)
 
       @slo_manager&.update(payload["slo_rules"])
+      # Error tracking is off unless this response says otherwise.
+      @error_tracker&.apply_rules(payload, requested: @requested_samples)
     end
   end
 end

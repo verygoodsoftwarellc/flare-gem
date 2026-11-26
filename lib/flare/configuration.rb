@@ -41,10 +41,34 @@ module Flare
 
     attr_accessor :subscribe_patterns
 
-    # Exceptions that jobs raise to wait or retry rather than to fail. A span
-    # that ends with one of these (or a subclass) counts as a success.
+    # Exceptions Flare ignores: they don't count as failures in metrics and
+    # don't become errors. Subclasses match too. GoodJob raises its entry to
+    # wait its turn; the rest are Honeybadger's noise defaults (bad routes,
+    # missing records, bad tokens, malformed requests). A request that
+    # returns a 5xx still counts as a failure in metrics, so
+    # ActionController::NotImplemented (501) counts as a failed request but,
+    # as a subclass of MethodNotAllowed, is still ignored as an error.
     DEFAULT_IGNORE_ERRORS = %w[
+      AbstractController::ActionNotFound
+      ActionController::BadRequest
+      ActionController::InvalidAuthenticityToken
+      ActionController::InvalidCrossOriginRequest
+      ActionController::MethodNotAllowed
+      ActionController::ParameterMissing
+      ActionController::RoutingError
+      ActionController::UnknownAction
+      ActionController::UnknownFormat
+      ActionController::UnknownHttpMethod
+      ActionDispatch::Http::MimeNegotiation::InvalidType
+      ActionDispatch::Http::Parameters::ParseError
+      ActiveRecord::RecordNotFound
+      CGI::Session::CookieStore::TamperedWithCookie
       GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError
+      Mongoid::Errors::DocumentNotFound
+      Rack::QueryParser::InvalidParameterError
+      Rack::QueryParser::ParameterTypeError
+      Sidekiq::JobRetry::Skip
+      Sinatra::NotFound
     ].freeze
 
     # HTTP metrics path tracking configuration.

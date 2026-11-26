@@ -1524,8 +1524,9 @@ class MetricSpanProcessorTest < Minitest::Test
     config = Flare::Configuration.new
     config.ignore_errors << "MyError"
 
-    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError", "MyError"], config.ignore_errors
-    assert_equal ["GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError"], Flare::Configuration.new.ignore_errors
+    assert_equal Flare::Configuration::DEFAULT_IGNORE_ERRORS + ["MyError"], config.ignore_errors
+    assert_equal Flare::Configuration::DEFAULT_IGNORE_ERRORS, Flare::Configuration.new.ignore_errors
+    assert_equal "ActiveRecord::RecordNotFound", config.ignore_errors.delete("ActiveRecord::RecordNotFound")
   end
 
   # Mock span class for testing

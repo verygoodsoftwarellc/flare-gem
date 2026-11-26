@@ -137,7 +137,7 @@ Flare.configure do |config|
     request.path.start_with?("/health")
   }
 
-  # Exceptions that don't count as errors in metrics (see below)
+  # Exceptions Flare ignores (see below)
   config.ignore_errors << "MyApp::RetryLaterError"
 
   # Subscribe to custom notification prefixes (default: ["app."])
@@ -150,13 +150,18 @@ Flare.configure do |config|
 end
 ```
 
-### Errors that aren't failures
+### Ignored errors
 
-Some exceptions are control flow. A GoodJob job with `perform_limit` or `perform_throttle` raises `GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError` (or its subclass `ThrottleExceededError`) to wait its turn, then retries. Flare counts a span that ends with an exception in `config.ignore_errors`, or a subclass of one, as a success: it still counts toward throughput and duration, just not the error rate. Traces still record the exception. Append your own class names, or assign a new list to replace the default:
+`config.ignore_errors` is the one list of exceptions Flare ignores: they don't count as failures in metrics and don't become errors. A subclass of a listed class is ignored too. A span that ends with one still counts toward throughput and duration, just not the error rate, and traces still record the exception. A request that returns a 5xx always counts as failed.
+
+The defaults cover noise (routing errors, `ActiveRecord::RecordNotFound`, invalid authenticity tokens, malformed params and the like, see `Flare::Configuration::DEFAULT_IGNORE_ERRORS`) and control flow: a GoodJob job with `perform_limit` or `perform_throttle` raises `GoodJob::ActiveJobExtensions::Concurrency::ConcurrencyExceededError` (or its subclass `ThrottleExceededError`) to wait its turn, then retries.
+
+Add your own, remove a default, or replace the list:
 
 ```ruby
 config.ignore_errors << "MyApp::RetryLaterError"
-config.ignore_errors = []  # count every exception as an error
+config.ignore_errors.delete("ActiveRecord::RecordNotFound")  # count missing records again
+config.ignore_errors = []  # count every exception
 ```
 
 ## Custom Instrumentation

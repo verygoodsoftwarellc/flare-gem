@@ -32,6 +32,7 @@ module Flare
       Flare.subscribe_to_custom_patterns
       Flare.start_rule_manager
       Flare.start_metrics_flusher
+      Flare.subscribe_to_error_reporter
     end
 
     # Auto-mount routes in development/test
